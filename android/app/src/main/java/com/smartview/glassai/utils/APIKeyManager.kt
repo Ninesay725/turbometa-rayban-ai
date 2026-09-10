@@ -33,6 +33,14 @@ class APIKeyManager(context: Context) {
         private const val KEY_VIDEO_QUALITY = "video_quality"
         private const val KEY_RTMP_URL = "rtmp_url"
 
+        // OpenClaw (Phase B). Non-secret settings live next to rtmp_url; the token and the
+        // Ed25519 seed need the encrypted store (Android Keystore has no Ed25519).
+        private const val KEY_OPENCLAW_HOST = "openclaw_host"
+        private const val KEY_OPENCLAW_PORT = "openclaw_port"
+        private const val KEY_OPENCLAW_SCHEME = "openclaw_scheme"
+        private const val KEY_OPENCLAW_TOKEN = "openclaw_gateway_token"
+        private const val KEY_OPENCLAW_DEVICE_SEED = "openclaw_ed25519_seed"
+
         @Volatile
         private var instance: APIKeyManager? = null
 
@@ -221,6 +229,61 @@ class APIKeyManager(context: Context) {
 
     fun getRtmpUrl(): String? {
         return sharedPreferences.getString(KEY_RTMP_URL, null)
+    }
+
+    // MARK: - OpenClaw (Phase B)
+
+    fun getOpenClawHost(): String =
+        sharedPreferences.getString(KEY_OPENCLAW_HOST, null)?.takeIf { it.isNotBlank() } ?: "127.0.0.1"
+
+    fun saveOpenClawHost(host: String) {
+        sharedPreferences.edit().putString(KEY_OPENCLAW_HOST, host.trim()).apply()
+    }
+
+    fun getOpenClawPort(): Int {
+        val port = sharedPreferences.getInt(KEY_OPENCLAW_PORT, 0)
+        return if (port in 1..65535) port else 18789
+    }
+
+    fun saveOpenClawPort(port: Int) {
+        sharedPreferences.edit().putInt(KEY_OPENCLAW_PORT, port).apply()
+    }
+
+    fun getOpenClawScheme(): String =
+        if (sharedPreferences.getString(KEY_OPENCLAW_SCHEME, null) == "wss") "wss" else "ws"
+
+    fun saveOpenClawScheme(scheme: String) {
+        sharedPreferences.edit().putString(KEY_OPENCLAW_SCHEME, if (scheme == "wss") "wss" else "ws").apply()
+    }
+
+    fun getOpenClawToken(): String? = try {
+        sharedPreferences.getString(KEY_OPENCLAW_TOKEN, null)?.takeIf { it.isNotBlank() }
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to read OpenClaw token: ${e.message}")
+        null
+    }
+
+    fun saveOpenClawToken(token: String) {
+        sharedPreferences.edit().putString(KEY_OPENCLAW_TOKEN, token.trim()).apply()
+    }
+
+    fun deleteOpenClawToken() {
+        sharedPreferences.edit().remove(KEY_OPENCLAW_TOKEN).apply()
+    }
+
+    /** The 32-byte Ed25519 seed, stored as standard base64. */
+    fun getOpenClawDeviceSeed(): ByteArray? = try {
+        sharedPreferences.getString(KEY_OPENCLAW_DEVICE_SEED, null)
+            ?.let { java.util.Base64.getDecoder().decode(it) }
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to read OpenClaw device seed: ${e.message}")
+        null
+    }
+
+    fun saveOpenClawDeviceSeed(seed: ByteArray) {
+        sharedPreferences.edit()
+            .putString(KEY_OPENCLAW_DEVICE_SEED, java.util.Base64.getEncoder().encodeToString(seed))
+            .apply()
     }
 }
 

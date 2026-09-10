@@ -147,6 +147,8 @@ dependencies {
 
     // Security
     implementation(libs.androidx.security.crypto)
+    // Ed25519 device identity for OpenClaw (Android 12 has no java.security Ed25519 provider)
+    implementation(libs.tink.android)
 
     // Networking
     implementation(libs.okhttp)
@@ -168,9 +170,12 @@ dependencies {
     // Unit tests (JVM)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // OpenClaw / Fun-ASR protocol tests run against an in-process WebSocket server
+    testImplementation(libs.okhttp.mockwebserver)
 
     // Instrumented tests (emulator + MockDeviceKit, Task 9)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.okhttp.mockwebserver)
 }

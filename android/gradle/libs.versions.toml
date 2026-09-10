@@ -10,6 +10,7 @@ okhttp = "4.12.0"
 gson = "2.10.1"
 datastore = "1.0.0"
 security = "1.1.0-alpha06"
+tink = "1.20.0"
 coil = "2.6.0"
 activityCompose = "1.13.0"
 appcompat = "1.7.0"
@@ -64,10 +65,14 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 
 # Security
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "security" }
+# Ed25519 for the OpenClaw device identity. 1.20.0 is exactly what mwdat-core 0.9.0 already
+# depends on, so declaring it here pins the compile classpath without changing the resolved version.
+tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
 
 # Networking
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 
 # Image Loading
