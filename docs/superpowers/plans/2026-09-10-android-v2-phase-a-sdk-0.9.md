@@ -45,7 +45,7 @@
 | `app/src/test/java/com/smartview/glassai/glasses/FakeDat.kt` | Create (Task 3), extend (Task 5) | Test fakes for the gateway interfaces (sync or async `stop()`, scripted failures, scripted capture results) |
 | `app/src/test/java/com/smartview/glassai/glasses/GlassesSessionManagerTest.kt` | Create (Task 3) | State-machine unit tests (24 tests) |
 | `app/src/main/java/com/smartview/glassai/glasses/GlassesPhotoCapturer.kt` | Create (Task 5) | The wake-word capture path as a testable class: wait device → acquire → session → camera → `capturePhoto()` → frame fallback → release |
-| `app/src/test/java/com/smartview/glassai/glasses/GlassesPhotoCapturerTest.kt` | Create (Task 5) | JVM tests for the capture path with the fakes (5 tests) |
+| `app/src/test/java/com/smartview/glassai/glasses/GlassesPhotoCapturerTest.kt` | Create (Task 5) | JVM tests for the capture path with the fakes (6 tests) |
 | `app/src/androidTest/java/com/smartview/glassai/glasses/GlassesSessionManagerInstrumentedTest.kt` | Create (Task 9) | Emulator + MockDeviceKit: registration, stream, photo, capturer through the shared session, `displayState` stays `NOT_ATTACHED` (spec §10) |
 | `app/src/androidTest/assets/plant.mp4` | Create (Task 9, copied from `$SAMPLE`) | H.265 clip used as the mock camera feed |
 | `app/src/androidTest/assets/plant.png` | Create (Task 9, copied from `$SAMPLE`) | Image returned by the mock `capturePhoto()` |
@@ -3892,7 +3892,7 @@ Expected: `BUILD SUCCESSFUL`, `app/build/outputs/apk/debug/app-universal-debug.a
 ./gradlew :app:testDebugUnitTest --tests 'com.smartview.glassai.glasses.GlassesSessionManagerTest' --tests 'com.smartview.glassai.glasses.GlassesPhotoCapturerTest'
 ```
 
-Expected: `BUILD SUCCESSFUL`; the report `app/build/reports/tests/testDebugUnitTest/index.html` shows 29 tests (24 in `GlassesSessionManagerTest` + 5 in `GlassesPhotoCapturerTest`), 0 failures. If a test fails on a `Log` call (`Method d in android.util.Log not mocked`), confirm `testOptions { unitTests.isReturnDefaultValues = true }` is present in `app/build.gradle.kts` (Task 1, Step 1.5). If `capturesPhotoThroughSharedSessionAndReleasesEverything` fails to construct `PhotoData.HEIC`, replace `heicPhoto` with `PhotoData.HEIC(ByteBuffer.allocate(0))` — only the constructor shape, never the assertions, may change.
+Expected: `BUILD SUCCESSFUL`; the report `app/build/reports/tests/testDebugUnitTest/index.html` shows 30 tests (24 in `GlassesSessionManagerTest` + 6 in `GlassesPhotoCapturerTest`), 0 failures. If a test fails on a `Log` call (`Method d in android.util.Log not mocked`), confirm `testOptions { unitTests.isReturnDefaultValues = true }` is present in `app/build.gradle.kts` (Task 1, Step 1.5). If `capturesPhotoThroughSharedSessionAndReleasesEverything` fails to construct `PhotoData.HEIC`, replace `heicPhoto` with `PhotoData.HEIC(ByteBuffer.allocate(0))` — only the constructor shape, never the assertions, may change.
 
 - [ ] **Step 5.10 — Commit.**
 
@@ -4400,7 +4400,7 @@ import com.smartview.glassai.R
 ./gradlew :app:testDebugUnitTest
 ```
 
-Expected: both `BUILD SUCCESSFUL`; 34 tests passed (24 `GlassesSessionManagerTest` + 5 `GlassesPhotoCapturerTest` + 5 `GlassesErrorMessagesTest`), 0 failures.
+Expected: both `BUILD SUCCESSFUL`; 35 tests passed (24 `GlassesSessionManagerTest` + 6 `GlassesPhotoCapturerTest` + 5 `GlassesErrorMessagesTest`), 0 failures.
 
 - [ ] **Step 6.10 — Commit.**
 
@@ -5801,7 +5801,7 @@ git -C .. status --short            # expect empty
 ./gradlew clean :app:assembleDebug test
 ```
 
-Expected: `BUILD SUCCESSFUL`; both `app/build/reports/tests/testDebugUnitTest/index.html` and `app/build/reports/tests/testReleaseUnitTest/index.html` show 34 tests (24 + 5 + 5), 0 failures.
+Expected: `BUILD SUCCESSFUL`; both `app/build/reports/tests/testDebugUnitTest/index.html` and `app/build/reports/tests/testReleaseUnitTest/index.html` show 35 tests (24 + 6 + 5), 0 failures.
 
 - [ ] **Step 10.2 — Boot the emulator** (skip if the one from Step 9.4 is still running; Git Bash, the emulator keeps running in the background):
 
@@ -5881,8 +5881,8 @@ Spec section → task coverage (design spec `docs/superpowers/specs/2026-09-10-a
 | §5.8 — frames off the main thread (`Dispatchers.Default.limitedParallelism(1)`), drop while busy (`isProcessingFrame`), SDK buffer copied first, no `conflate()`, skip `isCompressed`/`isCodecConfig`, `PAUSED` → `Paused` ("轻触眼镜恢复") | Task 5 (`GlassesPhotoCapturer` decodes on `Dispatchers.Default`; RTMP `handleVideoFrame` copies first) + Task 6 (Steps 6.5–6.8) |
 | §5.9 — localized zh/en text for every `StreamError` / `DeviceSessionError` branch (plus `CaptureError`, `RegistrationError`) | Task 6 (`GlassesErrorMessages`, strings, exhaustiveness + no-fallthrough test) |
 | §5.10 — MockDeviceKit debug page (debug only, Settings entry): enable/disable, pair `RAYBAN_META`, power, don/doff, fold, video/image source, phone camera, captouch tap | Task 8 |
-| §5 验证 — `assembleDebug` green; `Pixel_5` + MockDeviceKit registration / stream / photo / Quick Vision; `./gradlew test` passes the new unit tests | `assembleDebug`: Steps 5.8, 6.9, 7.4, 8.8, 10.1; MockDeviceKit flows: Task 9 (automated, 6 instrumented tests) + Task 10 (manual checklist, 15 items); `./gradlew test` (both variants, 34 tests): Step 10.1 |
-| §10 单元测试 — ref-count state machine with fake DAT interfaces | Task 3 (`FakeDat.kt`, `GlassesSessionManagerTest`: 24 tests incl. the STOPPING → STOPPED re-create race), Task 5 (`GlassesPhotoCapturerTest`: 5), Task 6 (`GlassesErrorMessagesTest`: 5) |
+| §5 验证 — `assembleDebug` green; `Pixel_5` + MockDeviceKit registration / stream / photo / Quick Vision; `./gradlew test` passes the new unit tests | `assembleDebug`: Steps 5.8, 6.9, 7.4, 8.8, 10.1; MockDeviceKit flows: Task 9 (automated, 6 instrumented tests) + Task 10 (manual checklist, 15 items); `./gradlew test` (both variants, 35 tests): Step 10.1 |
+| §10 单元测试 — ref-count state machine with fake DAT interfaces | Task 3 (`FakeDat.kt`, `GlassesSessionManagerTest`: 24 tests incl. the STOPPING → STOPPED re-create race), Task 5 (`GlassesPhotoCapturerTest`: 6 incl. the retry when the session disappears during start), Task 6 (`GlassesErrorMessagesTest`: 5) |
 | §10 仪器测试 — registration, stream, photo, Quick Vision service through the shared session, `isDisplayCapable == false` → no `addDisplay` | Task 9 `GlassesSessionManagerInstrumentedTest`: `mockDeviceRegistersAndBecomesTheActiveDevice`, `sharedSessionStreamsAndCapturesAPhoto`, `capturerTakesThePhotoThroughTheSharedSession`, `capturerFallsBackToVideoFrameWhenPhotoIsUndecodable`, `capturerIsRefusedWithCameraBusyWhileAnotherOwnerStreams`, `displayIsNeverAttachedForANonDisplayCapableDevice` (+ JVM `defaultAttacherNeverAttachesDisplayEvenForDisplayCapableDevice`) |
 | §11 risk row 1 — toolchain bump isolated before any migration | Task 1 ends green on 0.4.0; Task 2 bumps the SDK |
 | Feature-gap row 62 — MockDeviceKit debug UI | Task 8 |
