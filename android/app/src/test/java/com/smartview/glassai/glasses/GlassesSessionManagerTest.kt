@@ -464,4 +464,77 @@ class GlassesSessionManagerTest {
         assertEquals(1, factory.last.stopCalls)
         assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
     }
+
+    // ---- Phase B: latestFrame / publishFrame / resetForTests ----
+
+    @Test
+    fun cameraOwnerPublishesTheLatestFrame() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        val frame = TestBitmaps.stub()
+
+        manager.publishFrame("A", frame)
+
+        assertSame(frame, manager.latestFrame.value)
+    }
+
+    @Test
+    fun nonOwnerFramesAreIgnored() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+
+        manager.publishFrame("B", TestBitmaps.stub())
+
+        assertNull(manager.latestFrame.value)
+    }
+
+    @Test
+    fun stopCameraClearsTheLatestFrame() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        manager.publishFrame("A", TestBitmaps.stub())
+
+        manager.stopCamera("A")
+
+        assertNull(manager.latestFrame.value)
+    }
+
+    @Test
+    fun deviceStopClearsTheLatestFrame() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        manager.publishFrame("A", TestBitmaps.stub())
+
+        factory.last.emitStoppedByDevice()
+
+        assertNull(manager.latestFrame.value)
+    }
+
+    @Test
+    fun resetForTestsDropsOwnersSessionAndFrame() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        manager.acquire("B")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        manager.publishFrame("A", TestBitmaps.stub())
+
+        manager.resetForTests()
+
+        assertEquals(0, manager.ownerCount)
+        assertFalse(manager.hasSession)
+        assertNull(manager.currentCameraOwner)
+        assertNull(manager.latestFrame.value)
+        assertEquals(1, factory.last.stopCalls)
+        assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
+        assertFalse(manager.isStoppingPreviousSession)
+    }
 }

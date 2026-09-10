@@ -1,5 +1,7 @@
 package com.smartview.glassai.glasses
 
+import android.app.Activity
+import android.content.Context
 import com.meta.wearable.dat.camera.Camera
 import com.meta.wearable.dat.camera.addCamera
 import com.meta.wearable.dat.camera.types.StreamConfiguration
@@ -16,6 +18,10 @@ import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceIdentifier
 import com.meta.wearable.dat.core.types.DeviceSessionError
 import com.meta.wearable.dat.core.types.DeviceType
+import com.meta.wearable.dat.core.types.Permission
+import com.meta.wearable.dat.core.types.PermissionStatus
+import com.meta.wearable.dat.core.types.RegistrationError
+import com.meta.wearable.dat.core.types.RegistrationState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
@@ -125,4 +131,39 @@ class WearablesDatAdapter(
         isDisplayCapable = isDisplayCapable(),
         compatibility = compatibility,
     )
+}
+
+/** Real [DatRegistrationGateway] over the Wearables statics. */
+class WearablesRegistrationGateway(private val context: Context) : DatRegistrationGateway {
+    override val registrationState: Flow<RegistrationState>
+        get() = Wearables.registrationState
+    override val registrationErrors: Flow<RegistrationError>
+        get() = Wearables.registrationErrorStream
+    override val devices: Flow<Set<DeviceIdentifier>>
+        get() = Wearables.devices
+
+    override fun startRegistration(activity: Activity) = Wearables.startRegistration(activity)
+
+    override fun startUnregistration(activity: Activity) = Wearables.startUnregistration(activity)
+
+    override fun openFirmwareUpdate(activity: Activity): String? =
+        Wearables.openFirmwareUpdate(activity).fold(
+            onSuccess = { null },
+            onFailure = { error, _ -> error.getLocalizedDescription(context) },
+        )
+
+    override fun openDATGlassesAppUpdate(activity: Activity): String? =
+        Wearables.openDATGlassesAppUpdate(activity).fold(
+            onSuccess = { null },
+            onFailure = { error, _ -> error.getLocalizedDescription(context) },
+        )
+
+    override suspend fun checkCameraPermission(): CameraPermissionCheck =
+        Wearables.checkPermissionStatus(Permission.CAMERA).fold(
+            onSuccess = { status ->
+                if (status == PermissionStatus.Granted) CameraPermissionCheck.Granted
+                else CameraPermissionCheck.Denied
+            },
+            onFailure = { error, _ -> CameraPermissionCheck.Failed(error.description) },
+        )
 }

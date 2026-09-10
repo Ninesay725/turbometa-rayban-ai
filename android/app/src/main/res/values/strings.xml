@@ -460,4 +460,7 @@
     <string name="mock_video_hint">Video files must be H.265 (HEVC).</string>
     <string name="mock_camera_permission_denied">Camera permission is required to use the phone camera as the mock feed.</string>
     <string name="mock_open_settings">Open settings</string>
+
+    <!-- Phase B Task 1: WearablesViewModel messages that were hard-coded English -->
+    <string name="glasses_permission_check_failed">Could not check the glasses camera permission: %1$s</string>
 </resources>

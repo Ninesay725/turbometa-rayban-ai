@@ -55,6 +55,8 @@ class FakeGlassesSession(private val stopAsync: Boolean = false) : GlassesSessio
     var nextAddCameraFailure: DeviceSessionError? = null
     /** Applied to every camera this session hands out (null = FakeGlassesCamera default). */
     var nextCaptureResult: PhotoCaptureResult? = null
+    /** Applied to every camera this session hands out: startStream() returns this error. */
+    var nextStartError: StreamError? = null
     val cameras = mutableListOf<FakeGlassesCamera>()
 
     override val state: StateFlow<DeviceSessionState> = stateFlow
@@ -76,6 +78,7 @@ class FakeGlassesSession(private val stopAsync: Boolean = false) : GlassesSessio
         nextAddCameraFailure?.let { return CameraAddResult.Failure(it) }
         val camera = FakeGlassesCamera()
         nextCaptureResult?.let { camera.captureResult = it }
+        nextStartError?.let { camera.startError = it }
         cameras += camera
         return CameraAddResult.Success(camera)
     }

@@ -1,7 +1,9 @@
 package com.smartview.glassai.glasses
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
@@ -81,7 +83,24 @@ class GlassesSessionManager internal constructor(
     private var stoppingSession: GlassesSession? = null
     private var stoppingJob: Job? = null
     private var camera: GlassesCamera? = null
+    // @Volatile: read by publishFrame() on the frame worker, written on the main thread.
+    @Volatile
     private var cameraOwner: String? = null
+
+    private val _latestFrame = MutableStateFlow<Bitmap?>(null)
+    /**
+     * The last decoded frame of whichever owner currently borrows the camera (Phase B: the
+     * OpenClaw camera.snap source). Cleared whenever the camera is stopped or the session ends.
+     */
+    val latestFrame: StateFlow<Bitmap?> = _latestFrame.asStateFlow()
+
+    private val _lastSessionError = MutableStateFlow<DeviceSessionError?>(null)
+    /**
+     * The most recent error also emitted on [sessionError], readable synchronously. Callers that
+     * get SessionStartResult.CREATE_FAILED read it to show the specific DAT reason regardless of
+     * whether the SharedFlow collector already ran (Phase A review Minor #5).
+     */
+    val lastSessionError: StateFlow<DeviceSessionError?> = _lastSessionError.asStateFlow()
     private val owners = LinkedHashSet<String>()
 
     private var sessionStateJob: Job? = null
@@ -183,6 +202,7 @@ class GlassesSessionManager internal constructor(
         if (stoppingSession != null) return false
         val error = createSessionIfNeeded() ?: return true
         _sessionState.value = DeviceSessionState.STOPPED
+        _lastSessionError.value = error
         _sessionError.tryEmit(error)
         return false
     }
@@ -205,6 +225,7 @@ class GlassesSessionManager internal constructor(
         if (error != null) {
             Log.e(TAG, "ensureSessionStarted: createSession failed: ${error.description}")
             _sessionState.value = DeviceSessionState.STOPPED
+            _lastSessionError.value = error
             _sessionError.tryEmit(error)
             return SessionStartResult.CREATE_FAILED
         }
@@ -306,6 +327,34 @@ class GlassesSessionManager internal constructor(
         camera?.stop()
         camera = null
         cameraOwner = null
+        _latestFrame.value = null
+    }
+
+    /**
+     * Called by the current camera owner from its frame worker after decoding a frame. This is the
+     * only manager method that may run off the main thread: it touches nothing but a StateFlow and
+     * the volatile owner name. Frames from anyone but the current owner are ignored.
+     */
+    fun publishFrame(owner: String, frame: Bitmap) {
+        if (cameraOwner != owner) return
+        _latestFrame.value = frame
+    }
+
+    /**
+     * Test hook (Task 9 parked item 2): forgets every owner, stops the session, drops the parked
+     * outgoing session and the latest frame so the next test starts from a clean singleton.
+     * Main thread only.
+     */
+    @VisibleForTesting
+    internal fun resetForTests() {
+        owners.clear()
+        stopSession()
+        stoppingJob?.cancel()
+        stoppingJob = null
+        stoppingSession = null
+        _latestFrame.value = null
+        _isDatAppUpdateRequired.value = false
+        _sessionState.value = DeviceSessionState.STOPPED
     }
 
     /**
@@ -319,6 +368,7 @@ class GlassesSessionManager internal constructor(
         camera?.stop()
         camera = null
         cameraOwner = null
+        _latestFrame.value = null
         cancelSessionJobs()
         session = null
         _sessionState.value = DeviceSessionState.STOPPING
@@ -349,6 +399,7 @@ class GlassesSessionManager internal constructor(
         if (error == DeviceSessionError.DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED) {
             _isDatAppUpdateRequired.value = true
         }
+        _lastSessionError.value = error
         _sessionError.tryEmit(error)
     }
 
@@ -364,6 +415,7 @@ class GlassesSessionManager internal constructor(
             .onFailure { Log.w(TAG, "camera.stop() after device stop failed", it) }
         camera = null
         cameraOwner = null
+        _latestFrame.value = null
         cancelSessionJobs()
         session = null
         _sessionState.value = DeviceSessionState.STOPPED

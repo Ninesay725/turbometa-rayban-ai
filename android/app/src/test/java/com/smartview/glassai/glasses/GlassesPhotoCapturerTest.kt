@@ -3,6 +3,7 @@ package com.smartview.glassai.glasses
 import com.meta.wearable.dat.camera.types.CaptureError
 import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.camera.types.StreamError
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceType
@@ -162,6 +163,43 @@ class GlassesPhotoCapturerTest {
 
         assertEquals(PhotoCaptureOutcome.Captured("photo", fromVideoFrame = false), outcome.await())
         assertEquals(2, factory.createCalls)
+        assertEquals(0, manager.ownerCount)
+    }
+
+    @Test
+    fun streamStartFailureIsReportedAndEverythingReleased() = runTest(dispatcher) {
+        observer.device.value = rayban
+        val manager = newManager()
+
+        val outcome = async { capturer(manager).capture() }
+        val session = factory.last
+        session.nextStartError = StreamError.STREAM_ERROR // every camera's startStream() fails
+        session.emitStarted()
+
+        assertEquals(PhotoCaptureOutcome.StreamStartFailed(StreamError.STREAM_ERROR), outcome.await())
+        assertEquals(1, session.cameras.single().startCalls)
+        assertEquals(1, session.cameras.single().stopCalls)
+        assertNull(manager.currentCameraOwner)
+        assertEquals(0, manager.ownerCount)
+        assertEquals(1, session.stopCalls)
+    }
+
+    @Test
+    fun streamErrorInsteadOfStreamingEndsInStreamTimeout() = runTest(dispatcher) {
+        observer.device.value = rayban
+        val manager = newManager()
+
+        val outcome = async { capturer(manager).capture() }
+        factory.last.emitStarted()
+        val camera = factory.last.cameras.single()
+        // The SDK reports a stream error and never reaches STREAMING: the capturer's stream budget
+        // is the only thing that ends the wait (it does not subscribe to streamErrors by design).
+        assertTrue(camera.errors.tryEmit(StreamError.STREAM_ERROR))
+        advanceTimeBy(GlassesPhotoCapturer.DEFAULT_STREAM_TIMEOUT_MS + 1)
+
+        assertEquals(PhotoCaptureOutcome.StreamTimeout, outcome.await())
+        assertEquals(1, camera.stopCalls)
+        assertNull(manager.currentCameraOwner)
         assertEquals(0, manager.ownerCount)
     }
 }

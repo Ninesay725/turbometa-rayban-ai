@@ -2,10 +2,6 @@ package com.smartview.glassai.viewmodels
 
 import android.app.Application
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,6 +12,7 @@ import com.meta.wearable.dat.camera.types.VideoQuality
 import com.smartview.glassai.R
 import com.smartview.glassai.glasses.CameraError
 import com.smartview.glassai.glasses.CameraResult
+import com.smartview.glassai.glasses.FrameConversions
 import com.smartview.glassai.glasses.GlassesCamera
 import com.smartview.glassai.glasses.GlassesErrorMessages
 import com.smartview.glassai.glasses.GlassesSessionManager
@@ -28,7 +25,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -350,48 +346,11 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     }
 
     /** Defensive copy of the SDK frame; null if the buffer could not be read. */
-    private fun copyFrame(videoFrame: VideoFrame): ByteArray? = try {
-        val buffer = videoFrame.buffer
-        val originalPosition = buffer.position()
-        val copy = ByteArray(buffer.remaining())
-        buffer.get(copy)
-        buffer.position(originalPosition)
-        copy
-    } catch (e: Exception) {
-        Log.e(TAG, "Error copying video frame: ${e.message}")
-        null
-    }
+    private fun copyFrame(videoFrame: VideoFrame): ByteArray? = FrameConversions.copyI420(videoFrame)
 
     private fun updatePreview(i420: ByteArray, width: Int, height: Int) {
-        try {
-            // Convert I420 to NV21 for preview
-            val nv21 = convertI420toNV21(i420, width, height)
-            val image = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-
-            val jpegBytes = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, width, height), 50, stream)
-                stream.toByteArray()
-            }
-
-            val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-            _previewFrame.value = bitmap
-        } catch (e: Exception) {
-            Log.e(TAG, "Error updating preview: ${e.message}")
-        }
-    }
-
-    private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
-        val output = ByteArray(input.size)
-        val size = width * height
-        val quarter = size / 4
-
-        input.copyInto(output, 0, 0, size) // Y is the same
-
-        for (n in 0 until quarter) {
-            output[size + n * 2] = input[size + quarter + n] // V first
-            output[size + n * 2 + 1] = input[size + n] // U second
-        }
-        return output
+        val bitmap = FrameConversions.i420ToBitmap(i420, width, height, FrameConversions.PREVIEW_JPEG_QUALITY)
+        if (bitmap != null) _previewFrame.value = bitmap
     }
 
     private fun cancelCameraJobs() {

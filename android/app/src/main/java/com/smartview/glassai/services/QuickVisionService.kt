@@ -8,10 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -25,6 +21,7 @@ import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
 import com.smartview.glassai.glasses.CameraError
+import com.smartview.glassai.glasses.FrameConversions
 import com.smartview.glassai.glasses.GlassesPhotoCapturer
 import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.PhotoCaptureOutcome
@@ -44,7 +41,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import kotlin.coroutines.resume
@@ -320,54 +316,10 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         finishService()
     }
 
-    private fun decodePhoto(photo: PhotoData): Bitmap? = when (photo) {
-        is PhotoData.Bitmap -> photo.bitmap
-        is PhotoData.HEIC -> {
-            val buffer = photo.data.duplicate().apply { rewind() }
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        }
-    }
+    private fun decodePhoto(photo: PhotoData): Bitmap? = FrameConversions.decodePhoto(photo)
 
-    private fun convertVideoFrameToBitmap(videoFrame: VideoFrame): Bitmap? {
-        return try {
-            val buffer = videoFrame.buffer
-            val dataSize = buffer.remaining()
-            val byteArray = ByteArray(dataSize)
-            val originalPosition = buffer.position()
-            buffer.get(byteArray)
-            buffer.position(originalPosition)
-
-            // Convert I420 to NV21
-            val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
-            val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
-
-            val jpegBytes = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 85, stream)
-                stream.toByteArray()
-            }
-
-            BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error converting video frame: ${e.message}")
-            null
-        }
-    }
-
-    private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
-        val output = ByteArray(input.size)
-        val size = width * height
-        val quarter = size / 4
-
-        input.copyInto(output, 0, 0, size)
-
-        for (n in 0 until quarter) {
-            output[size + n * 2] = input[size + quarter + n]
-            output[size + n * 2 + 1] = input[size + n]
-        }
-        return output
-    }
+    private fun convertVideoFrameToBitmap(videoFrame: VideoFrame): Bitmap? =
+        FrameConversions.frameToBitmap(videoFrame, FrameConversions.CAPTURE_JPEG_QUALITY)
 
     private fun speak(text: String, useOutputLocale: Boolean = false) {
         if (!isTtsReady || text.isBlank()) return

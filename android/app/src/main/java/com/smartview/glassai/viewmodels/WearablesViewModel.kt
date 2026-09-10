@@ -3,61 +3,92 @@ package com.smartview.glassai.viewmodels
 import android.app.Activity
 import android.app.Application
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
-import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.DeviceIdentifier
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationState
 import com.smartview.glassai.R
 import com.smartview.glassai.glasses.CameraError
+import com.smartview.glassai.glasses.CameraPermissionCheck
 import com.smartview.glassai.glasses.CameraResult
+import com.smartview.glassai.glasses.DatRegistrationGateway
+import com.smartview.glassai.glasses.FrameConversions
 import com.smartview.glassai.glasses.GlassesCamera
 import com.smartview.glassai.glasses.GlassesDeviceInfo
 import com.smartview.glassai.glasses.GlassesErrorMessages
 import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.PhotoCaptureResult
 import com.smartview.glassai.glasses.SessionStartResult
+import com.smartview.glassai.glasses.WearablesRegistrationGateway
 import com.smartview.glassai.utils.APIKeyManager
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * WearablesViewModel - UI-facing DAT SDK façade (DAT 0.9.0).
  *
- * - Registration / unregistration (needs a real Activity: the 0.4.0 code passed the Application
- *   and crashed with ClassCastException).
+ * - Registration / unregistration (needs a real Activity) through [DatRegistrationGateway].
  * - Device discovery + active-device metadata via GlassesSessionManager.
- * - Camera streaming borrowed from the shared GlassesSessionManager (one DeviceSession per device).
+ * - Camera streaming borrowed from the shared GlassesSessionManager (one DeviceSession per device);
+ *   every decoded frame is also published to GlassesSessionManager.latestFrame (OpenClaw snap source).
  *
  * The public contract (StreamState sealed class, currentFrame, startStream/stopStream/takePhoto,
- * capturedPhoto, hasActiveDevice, connectionState, isRegistered) is unchanged for the screens.
+ * capturedPhoto, hasActiveDevice, connectionState, isRegistered, errorMessage) is unchanged for the
+ * screens. [errorEvents] is the one-shot channel for the toast; [errorMessage] stays as state.
+ *
+ * The internal constructor exists so JVM tests can inject fakes (Phase A review Important #4);
+ * the Application-only constructor is the one `by viewModels()` uses.
  */
-class WearablesViewModel(application: Application) : AndroidViewModel(application) {
+class WearablesViewModel internal constructor(
+    application: Application,
+    private val sessionManager: GlassesSessionManager,
+    private val registration: DatRegistrationGateway,
+    private val strings: (Int) -> String,
+    private val videoQuality: () -> VideoQuality,
+    private val frameDispatcher: CoroutineDispatcher,
+) : AndroidViewModel(application) {
+
+    constructor(application: Application) : this(
+        application = application,
+        sessionManager = GlassesSessionManager.getInstance(application),
+        registration = WearablesRegistrationGateway(application),
+        strings = { id -> application.getString(id) },
+        videoQuality = { videoQualityFromSetting(APIKeyManager.getInstance(application).getVideoQuality()) },
+        // Single-threaded worker for frame decoding (never the main thread), like the 0.9.0 sample
+        frameDispatcher = Dispatchers.Default.limitedParallelism(1),
+    )
 
     companion object {
         private const val TAG = "WearablesViewModel"
-        private const val OWNER = "WearablesViewModel"
+        const val OWNER = "WearablesViewModel"
         private const val SESSION_START_TIMEOUT_MS = 12_000L
         private const val FRAME_RATE = 24
+
+        fun videoQualityFromSetting(setting: String): VideoQuality = when (setting) {
+            "LOW" -> VideoQuality.LOW
+            "HIGH" -> VideoQuality.HIGH
+            else -> VideoQuality.MEDIUM
+        }
     }
 
     // Connection states
@@ -104,16 +135,16 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     private val _hasActiveDevice = MutableStateFlow(false)
     val hasActiveDevice: StateFlow<Boolean> = _hasActiveDevice.asStateFlow()
 
+    /** Latest error as state (inline consumers). Cleared by [clearError] and at every startStream(). */
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    /** One-shot error events for the single toast above the NavHost (Phase A review Minor #13). */
+    private val _errorEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val errorEvents: SharedFlow<String> = _errorEvents.asSharedFlow()
+
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
-
-    // Shared session owner (spec §4)
-    private val sessionManager: GlassesSessionManager by lazy {
-        GlassesSessionManager.getInstance(getApplication())
-    }
 
     /** Active device metadata: name, type, display capability, compatibility (spec §5.7). */
     val activeDevice: StateFlow<GlassesDeviceInfo?>
@@ -130,9 +161,6 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     // Borrowed camera (null when not streaming)
     private var camera: GlassesCamera? = null
 
-    // Single-threaded worker for frame decoding (never the main thread), like the 0.9.0 sample
-    private val frameDispatcher = Dispatchers.Default.limitedParallelism(1)
-
     // Drop frames while the previous one is still being converted (spec §5.8)
     private val isProcessingFrame = AtomicBoolean(false)
 
@@ -144,9 +172,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     private var deviceSelectorJob: Job? = null
     private var monitoringStarted = false
 
-    // Callbacks for external use
-    var onFrameReceived: ((Bitmap) -> Unit)? = null
-    var onPhotoTaken: ((Bitmap) -> Unit)? = null
+    private fun str(@StringRes id: Int): String = strings(id)
 
     fun startMonitoring() {
         if (monitoringStarted) return
@@ -157,9 +183,9 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         // 1. Registration errors FIRST: registrationErrorStream is hot with no replay, so it must be
         //    collected before the user can tap Connect.
         viewModelScope.launch {
-            Wearables.registrationErrorStream.collect { error ->
+            registration.registrationErrors.collect { error ->
                 Log.e(TAG, "Registration error: ${error.description}")
-                setError(GlassesErrorMessages.of(getApplication(), error))
+                setError(str(GlassesErrorMessages.resId(error)))
                 if (_connectionState.value is ConnectionState.Searching ||
                     _connectionState.value is ConnectionState.Connecting
                 ) {
@@ -170,7 +196,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
 
         // 2. Registration state (plain enum in 0.9.0)
         viewModelScope.launch {
-            Wearables.registrationState.collect { state ->
+            registration.registrationState.collect { state ->
                 Log.d(TAG, "Registration state changed: $state")
                 _registrationState.value = state
                 when (state) {
@@ -196,7 +222,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
 
         // 3. Available devices
         viewModelScope.launch {
-            Wearables.devices.collect { deviceSet ->
+            registration.devices.collect { deviceSet ->
                 Log.d(TAG, "Devices changed: ${deviceSet.size} devices")
                 _devices.value = deviceSet.toList()
             }
@@ -220,10 +246,12 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
-        // 5. Session errors (createSession failures + DeviceSession.errors)
+        // 5. Session errors (createSession failures + DeviceSession.errors). Deduplicated against
+        //    failStart(), which may already have shown the same reason via lastSessionError.
         viewModelScope.launch {
             sessionManager.sessionError.collect { error ->
-                setError(GlassesErrorMessages.of(getApplication(), error))
+                val message = str(GlassesErrorMessages.resId(error))
+                if (_errorMessage.value != message) setError(message)
             }
         }
     }
@@ -242,14 +270,18 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun startRegistration(activity: Activity) {
         Log.d(TAG, "Starting registration")
-        Wearables.startRegistration(activity)
+        registration.startRegistration(activity)
     }
 
     fun startUnregistration(activity: Activity) {
         Log.d(TAG, "Starting unregistration")
-        Wearables.startUnregistration(activity)
+        registration.startUnregistration(activity)
     }
 
+    /**
+     * Stops the stream, stops the shared session unconditionally (we are about to unregister from
+     * Meta AI, so no session could survive anyway) and unregisters.
+     */
     fun disconnect(activity: Activity) {
         viewModelScope.launch {
             stopStream()
@@ -262,40 +294,34 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Opens the Meta AI app's firmware update flow (Device.compatibility == DEVICE_UPDATE_REQUIRED). */
     fun openFirmwareUpdate(activity: Activity) {
-        Wearables.openFirmwareUpdate(activity).onFailure { error, _ ->
-            // NavigationError is not part of GlassesErrorMessages (spec §5.9 covers Stream/Session errors);
-            // the SDK's own localized text is used so the message still follows the device language.
-            setError(error.getLocalizedDescription(getApplication()))
-        }
+        // NavigationError is not part of GlassesErrorMessages (spec §5.9 covers Stream/Session errors);
+        // the SDK's own localized text is used so the message still follows the device language.
+        registration.openFirmwareUpdate(activity)?.let { setError(it) }
     }
 
     /** Opens the Meta AI app's DAT-glasses-app update flow (DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED). */
     fun openDATGlassesAppUpdate(activity: Activity) {
-        Wearables.openDATGlassesAppUpdate(activity).onFailure { error, _ ->
-            setError(error.getLocalizedDescription(getApplication()))
-        }
+        registration.openDATGlassesAppUpdate(activity)?.let { setError(it) }
     }
 
     // Navigate to streaming (check permission first)
     fun navigateToStreaming(onRequestWearablesPermission: suspend (Permission) -> PermissionStatus) {
         viewModelScope.launch {
-            val permission = Permission.CAMERA
-            val result = Wearables.checkPermissionStatus(permission)
-
-            result.onFailure { error, _ ->
-                setError("Permission check error: ${error.description}")
-                return@launch
-            }
-
-            val permissionStatus = result.getOrNull()
-            if (permissionStatus == PermissionStatus.Granted) {
-                _isStreaming.value = true
-                return@launch
+            when (val check = registration.checkCameraPermission()) {
+                is CameraPermissionCheck.Failed -> {
+                    setError(str(R.string.glasses_permission_check_failed).format(check.description))
+                    return@launch
+                }
+                CameraPermissionCheck.Granted -> {
+                    _isStreaming.value = true
+                    return@launch
+                }
+                CameraPermissionCheck.Denied -> Unit
             }
 
             // Request permission
-            when (onRequestWearablesPermission(permission)) {
-                PermissionStatus.Denied -> setError("Permission denied")
+            when (onRequestWearablesPermission(Permission.CAMERA)) {
+                PermissionStatus.Denied -> setError(str(R.string.camera_permission_denied))
                 PermissionStatus.Granted -> _isStreaming.value = true
             }
         }
@@ -306,10 +332,8 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     // Streaming
-    suspend fun checkCameraPermission(): Boolean {
-        val result = Wearables.checkPermissionStatus(Permission.CAMERA)
-        return result.getOrNull() == PermissionStatus.Granted
-    }
+    suspend fun checkCameraPermission(): Boolean =
+        registration.checkCameraPermission() == CameraPermissionCheck.Granted
 
     /**
      * Start streaming from the wearable device camera through the shared session:
@@ -330,14 +354,8 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         _currentFrame.value = null
         _streamState.value = StreamState.Waiting
 
-        // Get saved video quality setting
-        val savedQuality = APIKeyManager.getInstance(getApplication()).getVideoQuality()
-        val videoQuality = when (savedQuality) {
-            "LOW" -> VideoQuality.LOW
-            "HIGH" -> VideoQuality.HIGH
-            else -> VideoQuality.MEDIUM
-        }
-        Log.d(TAG, "Using video quality: $savedQuality")
+        val quality = videoQuality()
+        Log.d(TAG, "Using video quality: $quality")
 
         startJob = viewModelScope.launch {
             sessionManager.acquire(OWNER)
@@ -347,30 +365,25 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
                 SessionStartResult.STARTED -> Unit
                 SessionStartResult.CREATE_FAILED -> {
                     Log.e(TAG, "createSession failed")
-                    val message = getApplication<Application>().getString(R.string.glasses_session_failed)
-                    setError(message)
-                    _streamState.value = StreamState.Error(message)
-                    sessionManager.release(OWNER)
+                    // Show the specific DAT reason (e.g. NO_ELIGIBLE_DEVICE) read synchronously
+                    // from the manager; the SharedFlow collector may run before or after this
+                    // point depending on how the coroutine was resumed (Phase A review Minor #5).
+                    val specific = sessionManager.lastSessionError.value?.let { str(GlassesErrorMessages.resId(it)) }
+                    failStart(specific ?: str(R.string.glasses_session_failed))
                     return@launch
                 }
                 SessionStartResult.NOT_STARTED -> {
                     Log.e(TAG, "session did not reach STARTED")
-                    val message = getApplication<Application>().getString(R.string.glasses_session_timeout)
-                    setError(message)
-                    _streamState.value = StreamState.Error(message)
-                    sessionManager.release(OWNER)
+                    failStart(_errorMessage.value ?: str(R.string.glasses_session_timeout))
                     return@launch
                 }
             }
-            val config = StreamConfiguration(videoQuality = videoQuality, frameRate = FRAME_RATE)
+            val config = StreamConfiguration(videoQuality = quality, frameRate = FRAME_RATE)
             when (val result = sessionManager.addCamera(OWNER, config)) {
                 is CameraResult.Ready -> attachCamera(result.camera)
                 is CameraResult.Failed -> {
                     Log.e(TAG, "addCamera failed: ${result.error}")
-                    val message = cameraErrorMessage(result.error)
-                    setError(message)
-                    _streamState.value = StreamState.Error(message)
-                    sessionManager.release(OWNER)
+                    failStart(cameraErrorMessage(result.error))
                 }
             }
         }
@@ -378,15 +391,21 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         Log.d(TAG, "startStream END")
     }
 
+    /** Shared failure path for startStream(): message as state + event, Error state, claim released. */
+    private fun failStart(message: String) {
+        if (_errorMessage.value != message) setError(message)
+        _streamState.value = StreamState.Error(message)
+        sessionManager.release(OWNER)
+    }
+
     private fun attachCamera(borrowed: GlassesCamera) {
         camera = borrowed
 
-        // Subscribe BEFORE start(): streamState is a StateFlow that replays STOPPED.
-        // Frames are decoded on a single-threaded worker, never on the main thread. No conflate():
-        // VideoFrame.buffer is only guaranteed valid inside collect {}, so the collector reads it
-        // directly and handleVideoFrame copies the bytes as its first step. The AtomicBoolean is
-        // the drop policy from spec §5.8: a frame that arrives while the previous one is still being
-        // converted is skipped instead of queued.
+        // Subscribe before start(): streamState is a StateFlow that replays STOPPED. The frame
+        // collector is launched on the worker, so it attaches a few ms after start(); that is fine
+        // for a preview. No conflate(): VideoFrame.buffer is only guaranteed valid inside collect {},
+        // so FrameConversions copies the bytes as its first step. The AtomicBoolean is the drop
+        // policy from spec §5.8.
         videoJob = viewModelScope.launch(frameDispatcher) {
             Log.d(TAG, "Starting video frame collection")
             borrowed.videoFrames.collect { videoFrame ->
@@ -442,14 +461,14 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         streamErrorJob = viewModelScope.launch {
             borrowed.streamErrors.collect { error ->
                 Log.e(TAG, "Stream error: ${error.description}")
-                setError(GlassesErrorMessages.of(getApplication(), error))
+                setError(str(GlassesErrorMessages.resId(error)))
             }
         }
 
         val startError = borrowed.startStream()
         if (startError != null) {
             Log.e(TAG, "stream.start failed: ${startError.description}")
-            val message = GlassesErrorMessages.of(getApplication(), startError)
+            val message = str(GlassesErrorMessages.resId(startError))
             setError(message)
             stopStream()
             _streamState.value = StreamState.Error(message)
@@ -493,7 +512,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun cameraErrorMessage(error: CameraError): String =
-        GlassesErrorMessages.of(getApplication(), error)
+        str(GlassesErrorMessages.resId(error))
 
     /**
      * Capture a photo from the stream (DatResult<PhotoData, CaptureError> in 0.9.0).
@@ -510,81 +529,40 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
             Log.d(TAG, "Capturing photo...")
             when (val result = activeCamera.capturePhoto()) {
                 is PhotoCaptureResult.Success -> {
-                    val bitmap = withContext(Dispatchers.Default) { decodePhoto(result.photo) }
+                    val bitmap = withContext(frameDispatcher) { FrameConversions.decodePhoto(result.photo) }
                     if (bitmap == null) {
                         Log.e(TAG, "Photo decode failed")
-                        _errorMessage.value = getApplication<Application>().getString(R.string.photo_capture_failed)
+                        setError(str(R.string.photo_capture_failed))
                     } else {
                         Log.d(TAG, "Photo captured: ${bitmap.width}x${bitmap.height}")
                         _capturedPhoto.value = bitmap
-                        onPhotoTaken?.invoke(bitmap)
                     }
                 }
                 is PhotoCaptureResult.Failure -> {
                     Log.e(TAG, "Photo capture failed: ${result.error.description}")
-                    _errorMessage.value = GlassesErrorMessages.of(getApplication(), result.error)
+                    setError(str(GlassesErrorMessages.resId(result.error)))
                 }
             }
         }
         return _capturedPhoto.value
     }
 
-    private fun decodePhoto(photo: PhotoData): Bitmap? = when (photo) {
-        is PhotoData.Bitmap -> photo.bitmap
-        is PhotoData.HEIC -> {
-            val buffer = photo.data.duplicate().apply { rewind() }
-            val byteArray = ByteArray(buffer.remaining())
-            buffer.get(byteArray)
-            BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
-        }
-    }
-
     /**
-     * Handle incoming (uncompressed YUV, treated as I420) video frames.
+     * Handle incoming (uncompressed YUV, treated as I420) video frames on the frame worker.
+     * Runs inside the videoJob coroutine: the isActive check closes the ghost-frame window
+     * (a frame mid-conversion when stopStream() cancels the job must not repopulate the flows).
+     *
+     * Known, accepted trade-off: the published bitmap is the preview decode (JPEG quality 50), and
+     * an OpenClaw camera.snap taken while Live AI streams re-encodes it at its own quality, so such
+     * a snap is double-lossy compared with iOS's raw preview frame. Encoding a second, higher-quality
+     * copy of every frame only for the rare snap would double the per-frame work; snaps taken while
+     * nobody streams go through GlassesPhotoCapturer at CAPTURE_JPEG_QUALITY instead.
      */
-    private fun handleVideoFrame(videoFrame: VideoFrame) {
-        try {
-            val buffer = videoFrame.buffer
-            val dataSize = buffer.remaining()
-            val byteArray = ByteArray(dataSize)
-
-            // Save current position
-            val originalPosition = buffer.position()
-            buffer.get(byteArray)
-            // Restore position
-            buffer.position(originalPosition)
-
-            // Convert I420 to NV21 format
-            val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
-            val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
-
-            val jpegBytes = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
-                stream.toByteArray()
-            }
-
-            val newBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-
-            _currentFrame.value = newBitmap
-            onFrameReceived?.invoke(newBitmap)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error handling video frame: ${e.message}")
-        }
-    }
-
-    // Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
-    private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
-        val output = ByteArray(input.size)
-        val size = width * height
-        val quarter = size / 4
-
-        input.copyInto(output, 0, 0, size) // Y is the same
-
-        for (n in 0 until quarter) {
-            output[size + n * 2] = input[size + quarter + n] // V first
-            output[size + n * 2 + 1] = input[size + n] // U second
-        }
-        return output
+    private fun CoroutineScope.handleVideoFrame(videoFrame: VideoFrame) {
+        val bitmap = FrameConversions.frameToBitmap(videoFrame, FrameConversions.PREVIEW_JPEG_QUALITY) ?: return
+        if (!isActive) return
+        _currentFrame.value = bitmap
+        sessionManager.publishFrame(OWNER, bitmap)
     }
 
     fun clearCapturedPhoto() {
@@ -595,8 +573,10 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         _errorMessage.value = null
     }
 
+    /** Sets [errorMessage] (state) and emits the same text once on [errorEvents]. */
     fun setError(message: String) {
         _errorMessage.value = message
+        _errorEvents.tryEmit(message)
     }
 
     // Check if registered with Meta AI app (UNREGISTERING still counts as registered, like the sample)

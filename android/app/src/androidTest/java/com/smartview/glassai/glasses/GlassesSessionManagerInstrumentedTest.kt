@@ -101,6 +101,8 @@ class GlassesSessionManagerInstrumentedTest {
             withTimeoutOrNull(SESSION_TIMEOUT_MS) {
                 manager.sessionState.first { it == DeviceSessionState.STOPPED }
             }
+            // Phase B: forget owners / parked session / latest frame so the next test starts clean.
+            manager.resetForTests()
         }
         runCatching { mockDeviceKit.unpairDevice(device) }
             .onFailure { Log.w(TAG, "unpairDevice failed", it) }

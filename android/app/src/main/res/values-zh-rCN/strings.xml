@@ -460,4 +460,7 @@
     <string name="mock_video_hint">视频文件必须为 H.265 (HEVC) 编码。</string>
     <string name="mock_camera_permission_denied">使用手机摄像头作为模拟视频源需要相机权限。</string>
     <string name="mock_open_settings">打开设置</string>
+
+    <!-- Phase B Task 1: WearablesViewModel messages that were hard-coded English -->
+    <string name="glasses_permission_check_failed">无法检查眼镜相机权限：%1$s</string>
 </resources>

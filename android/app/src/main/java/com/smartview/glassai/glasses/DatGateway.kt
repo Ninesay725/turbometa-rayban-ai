@@ -1,5 +1,6 @@
 package com.smartview.glassai.glasses
 
+import android.app.Activity
 import com.meta.wearable.dat.camera.types.CaptureError
 import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
@@ -8,7 +9,10 @@ import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.session.DeviceSessionState
+import com.meta.wearable.dat.core.types.DeviceIdentifier
 import com.meta.wearable.dat.core.types.DeviceSessionError
+import com.meta.wearable.dat.core.types.RegistrationError
+import com.meta.wearable.dat.core.types.RegistrationState
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -65,6 +69,32 @@ interface DatSessionFactory {
 interface DatDeviceObserver {
     /** Metadata of the selector's active device, null when none is connected. */
     fun activeDeviceInfoFlow(): Flow<GlassesDeviceInfo?>
+}
+
+/** Result of the wearable CAMERA permission check (Wearables.checkPermissionStatus). */
+sealed class CameraPermissionCheck {
+    object Granted : CameraPermissionCheck()
+    object Denied : CameraPermissionCheck()
+    /** The SDK could not answer; [description] is the PermissionError description. */
+    data class Failed(val description: String) : CameraPermissionCheck()
+}
+
+/**
+ * The Wearables statics WearablesViewModel needs for registration, so the ViewModel can be built
+ * with a fake on the JVM (Phase A review Important #4). Real implementation:
+ * WearablesRegistrationGateway.
+ */
+interface DatRegistrationGateway {
+    val registrationState: Flow<RegistrationState>
+    val registrationErrors: Flow<RegistrationError>
+    val devices: Flow<Set<DeviceIdentifier>>
+    fun startRegistration(activity: Activity)
+    fun startUnregistration(activity: Activity)
+    /** @return null on success, else the SDK's localized description of the NavigationError. */
+    fun openFirmwareUpdate(activity: Activity): String?
+    /** @return null on success, else the SDK's localized description of the NavigationError. */
+    fun openDATGlassesAppUpdate(activity: Activity): String?
+    suspend fun checkCameraPermission(): CameraPermissionCheck
 }
 
 /**
