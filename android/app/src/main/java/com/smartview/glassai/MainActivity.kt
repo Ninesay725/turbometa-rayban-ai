@@ -2,6 +2,7 @@ package com.smartview.glassai
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -29,13 +30,22 @@ import kotlinx.coroutines.sync.withLock
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        // Required Android permissions for the DAT SDK
+        // Android permissions the DAT SDK needs before registration / device monitoring.
+        // RECORD_AUDIO is NOT here any more: Live AI and the wake word request it when needed.
         val PERMISSIONS: Array<String> = arrayOf(
             Manifest.permission.BLUETOOTH,
             Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.INTERNET,
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.INTERNET
         )
+
+        // Requested at launch on API 33+ so the foreground-service notifications are visible,
+        // but never a prerequisite for the SDK.
+        private val OPTIONAL_PERMISSIONS: Array<String> =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                emptyArray()
+            }
     }
 
     val wearablesViewModel: WearablesViewModel by viewModels()
@@ -48,8 +58,10 @@ class MainActivity : AppCompatActivity() {
     private val androidPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissionsResult ->
-        val granted = permissionsResult.entries.all { it.value }
-        if (granted) {
+        val requiredGranted = PERMISSIONS.all { permission ->
+            permissionsResult[permission] ?: isGranted(permission)
+        }
+        if (requiredGranted) {
             initializeSDK()
         } else {
             wearablesViewModel.setError(getString(R.string.permission_all_required))
@@ -101,17 +113,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkAndRequestPermissions() {
-        val permissionsToRequest = PERMISSIONS.filter { permission ->
-            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
-        }.toTypedArray()
+    private fun isGranted(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
-        if (permissionsToRequest.isEmpty()) {
-            // All permissions already granted
+    private fun checkAndRequestPermissions() {
+        val missing = (PERMISSIONS + OPTIONAL_PERMISSIONS).filter { !isGranted(it) }.toTypedArray()
+
+        if (PERMISSIONS.all { isGranted(it) }) {
+            // Required permissions already granted: start monitoring now
             initializeSDK()
-        } else {
-            // Request missing permissions
-            androidPermissionsLauncher.launch(permissionsToRequest)
+        }
+        if (missing.isNotEmpty()) {
+            // Ask for whatever is missing (required and/or POST_NOTIFICATIONS)
+            androidPermissionsLauncher.launch(missing)
         }
     }
 

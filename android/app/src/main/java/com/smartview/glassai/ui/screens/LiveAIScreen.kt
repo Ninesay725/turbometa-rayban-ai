@@ -1,7 +1,11 @@
 package com.smartview.glassai.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
@@ -34,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -82,13 +87,36 @@ fun LiveAIScreen(
 
     val listState = rememberLazyListState()
 
-    // Connect to AI and start stream when entering LiveAI
+    // Phone microphone permission is requested here, in context, instead of at app launch (spec §5.3)
+    val micContext = LocalContext.current
+    val micDeniedText = stringResource(R.string.permission_microphone)
+    var micGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(micContext, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        micGranted = granted
+        if (!granted) {
+            Toast.makeText(micContext, micDeniedText, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Start the video stream right away; ask for the microphone if we do not have it yet.
     // Note: Device connection is already verified before navigating here
     LaunchedEffect(Unit) {
-        // Start video stream first
         wearablesViewModel.startStream()
-        // Then connect to AI
-        if (!viewModel.isConnected.value) {
+        if (!micGranted) {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Connect to AI only once the microphone is available
+    LaunchedEffect(micGranted) {
+        if (micGranted && !viewModel.isConnected.value) {
             viewModel.connect()
         }
     }

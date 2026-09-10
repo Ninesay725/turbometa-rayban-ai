@@ -254,7 +254,7 @@
     <string name="permission_microphone">AI 对话需要麦克风权限</string>
     <string name="permission_bluetooth">连接眼镜需要蓝牙权限</string>
     <string name="permission_grant">授予权限</string>
-    <string name="permission_all_required">请授予所有权限（蓝牙、网络、录音）</string>
+    <string name="permission_all_required">请授予蓝牙和网络权限</string>
     <string name="camera_permission_denied">相机权限被拒绝。请在 Meta AI 应用中授予相机权限以使用此功能。</string>
 
     <!-- Video Quality -->
