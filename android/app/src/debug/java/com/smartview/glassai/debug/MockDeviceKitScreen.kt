@@ -211,7 +211,12 @@ private fun MockDeviceCard(info: MockDeviceInfo, viewModel: MockDeviceKitViewMod
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(info.deviceName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        // D2: resolved here, not in the ViewModel, so the in-app language switch applies.
+                        stringResource(R.string.mock_device_name),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     Text(info.deviceId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = { viewModel.unpairDevice(info) }) {

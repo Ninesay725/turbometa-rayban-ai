@@ -10,10 +10,12 @@ import com.smartview.glassai.R
 
 /**
  * Localized (zh/en) messages for every DAT error branch (spec §5.9).
- * The `when`s already list every 0.9.0 constant, so the `else` branches are redundant today
- * (hence the @Suppress); they exist only so a future SDK enum case cannot break compilation.
- * GlassesErrorMessagesTest asserts that no case falls through to dat_error_unknown, so such a
- * case fails the unit test until a string is added.
+ * The three SDK *enum* `when`s already list every 0.9.0 constant, so their `else` branches are
+ * redundant today (hence the @Suppress); they exist only so a future SDK enum case cannot break
+ * compilation. GlassesErrorMessagesTest asserts that no case falls through to dat_error_unknown,
+ * so such a case fails the unit test until a string is added.
+ * CaptureError and CameraError are *sealed*, so their `when`s carry no `else` and the compiler
+ * itself fails the build when the SDK (or this app) adds a subtype.
  */
 @Suppress("REDUNDANT_ELSE_IN_WHEN")
 object GlassesErrorMessages {
@@ -58,7 +60,6 @@ object GlassesErrorMessages {
         CaptureError.NotStreaming -> R.string.dat_capture_not_streaming
         CaptureError.CaptureInProgress -> R.string.dat_capture_in_progress
         CaptureError.CaptureFailed -> R.string.photo_capture_failed
-        else -> R.string.dat_error_unknown
     }
 
     @StringRes

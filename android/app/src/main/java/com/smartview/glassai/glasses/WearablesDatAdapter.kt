@@ -93,7 +93,10 @@ class WearablesDatAdapter(
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun activeDeviceInfoFlow(): Flow<GlassesDeviceInfo?> =
         deviceSelector.activeDeviceFlow()
-            .combine(Wearables.devices) { id, _ -> id }
+            // takeIf: on unpair/Bluetooth-off the selector can still hold an id whose metadata
+            // entry has already been removed. Resolving it to null shows "no device" instead of a
+            // transient "<raw id> (UNKNOWN)" card.
+            .combine(Wearables.devices) { id, devices -> id?.takeIf { it in devices } }
             .flatMapLatest { id ->
                 if (id == null) {
                     flowOf(null)

@@ -8,8 +8,6 @@ import com.meta.wearable.dat.mockdevice.MockDeviceKit
 import com.meta.wearable.dat.mockdevice.api.GlassesModel
 import com.meta.wearable.dat.mockdevice.api.MockGlasses
 import com.meta.wearable.dat.mockdevice.api.camera.CameraFacing
-import com.smartview.glassai.R
-import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,8 +15,12 @@ import kotlinx.coroutines.flow.update
 
 data class MockDeviceInfo(
     val device: MockGlasses,
+    /**
+     * The SDK's own DeviceIdentifier — stable across re-entry (so rehydration matches) and never
+     * localized. The display name is resolved with stringResource() in MockDeviceKitScreen so the
+     * in-app language switch applies to it (D2).
+     */
     val deviceId: String,
-    val deviceName: String,
     val hasCameraFeed: Boolean = false,
     val hasCapturedImage: Boolean = false,
     val cameraSource: CameraFacing? = null,
@@ -51,6 +53,26 @@ class MockDeviceKitViewModel(private val application: Application) : AndroidView
     private val _uiState = MutableStateFlow(MockDeviceKitUiState(isEnabled = mockDeviceKit.isEnabled))
     val uiState: StateFlow<MockDeviceKitUiState> = _uiState.asStateFlow()
 
+    init {
+        // D1: the ViewModel is scoped to the NavBackStackEntry, but MockDeviceKit keeps the devices
+        // paired for the whole process. Without this, leaving and re-entering the screen showed
+        // "0 paired" while the SDK still held up to MAX_DEVICES, so the cards became uncontrollable
+        // and re-pairing walked past the cap. Power/don/fold flags cannot be rehydrated (the SDK
+        // exposes no getters for them), so the toggles restart at off.
+        if (mockDeviceKit.isEnabled) {
+            val existing = mockDeviceKit.pairedDevices.filterIsInstance<MockGlasses>().map(::infoFor)
+            if (existing.isNotEmpty()) {
+                _uiState.update { it.copy(pairedDevices = existing) }
+                Log.d(TAG, "Rehydrated ${existing.size} already-paired mock device(s)")
+            }
+        }
+    }
+
+    private fun infoFor(device: MockGlasses) = MockDeviceInfo(
+        device = device,
+        deviceId = device.deviceIdentifier.identifier,
+    )
+
     fun enable() {
         mockDeviceKit.enable()
         _uiState.update { it.copy(isEnabled = true, lastError = null) }
@@ -65,11 +87,7 @@ class MockDeviceKitViewModel(private val application: Application) : AndroidView
         if (_uiState.value.pairedDevices.size >= MAX_DEVICES) return
         mockDeviceKit.pairGlasses(GlassesModel.RAYBAN_META).fold(
             onSuccess = { device ->
-                val info = MockDeviceInfo(
-                    device = device,
-                    deviceId = UUID.randomUUID().toString(),
-                    deviceName = application.getString(R.string.mock_device_name),
-                )
+                val info = infoFor(device)
                 _uiState.update { it.copy(pairedDevices = it.pairedDevices + info, lastError = null) }
                 Log.d(TAG, "Paired mock Ray-Ban Meta ${info.deviceId}")
             },

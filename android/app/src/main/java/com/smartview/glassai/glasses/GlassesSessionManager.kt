@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.delay
@@ -133,9 +134,13 @@ class GlassesSessionManager internal constructor(
     fun startMonitoring() {
         if (deviceJob != null) return
         deviceJob = scope.launch {
-            deviceObserver.activeDeviceInfoFlow().collect { info ->
-                _activeDevice.value = info
-            }
+            deviceObserver.activeDeviceInfoFlow()
+                // Without this the SupervisorJob swallows the failure and activeDevice would stay
+                // null forever with nothing in the log.
+                .catch { Log.e(TAG, "device flow failed", it) }
+                .collect { info ->
+                    _activeDevice.value = info
+                }
         }
     }
 
@@ -347,9 +352,16 @@ class GlassesSessionManager internal constructor(
         _sessionError.tryEmit(error)
     }
 
-    /** The SDK already stopped every capability; just drop our references. Owners keep their claims. */
+    /**
+     * The device ended the session. Owners keep their claims, but the lent Camera must still be
+     * stopped here: the borrower's stopCamera() is a no-op once cameraOwner is null, so the SDK
+     * Camera (and its MediaCodec decoder in the non-compressed path) would only be freed by GC.
+     * stop() on an already-stopped capability is expected to be harmless; it is guarded anyway.
+     */
     private fun teardownAfterDeviceStop() {
         displayAttacher.detach()
+        runCatching { camera?.stop() }
+            .onFailure { Log.w(TAG, "camera.stop() after device stop failed", it) }
         camera = null
         cameraOwner = null
         cancelSessionJobs()

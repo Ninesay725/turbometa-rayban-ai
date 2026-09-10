@@ -118,7 +118,11 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
             rtmpService.state.collect { state ->
                 when (state) {
                     is RTMPStreamingService.StreamingState.Idle -> {
-                        if (_uiState.value != UIState.Idle) {
+                        // Never downgrade a visible error: onConnectionFailedRtmp() sets Error and
+                        // then calls stopStreaming(), so Idle follows an Error within milliseconds
+                        // on the RTMP thread. startStreaming() moves the state on to Connecting and
+                        // the Stop button calls clearError() first, so Error is still recoverable.
+                        if (_uiState.value != UIState.Idle && _uiState.value !is UIState.Error) {
                             _uiState.value = UIState.Idle
                         }
                     }
@@ -170,6 +174,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         }
 
         Log.d(TAG, "Starting streaming to: ${_rtmpUrl.value}")
+        // A previous UIState.Error is cleared here (it is now kept until the user acts on it).
         _uiState.value = UIState.Connecting
 
         // Start DAT SDK camera stream first

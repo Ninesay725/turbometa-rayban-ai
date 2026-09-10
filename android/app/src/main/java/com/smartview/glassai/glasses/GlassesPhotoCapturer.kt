@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Outcome of one [GlassesPhotoCapturer.capture] attempt. */
@@ -39,9 +40,10 @@ sealed class PhotoCaptureOutcome<out T> {
  * wait for a device -> acquire -> ensureSessionStarted -> addCamera -> stream.start() ->
  * wait STREAMING -> capturePhoto() -> (fallback) first decoded video frame -> stopCamera + release.
  *
- * [T] is the decoded image type (Bitmap in the app, any type in JVM tests). Frames are decoded on
- * [frameDispatcher] (Dispatchers.Default in the app) so the main thread never converts pixels
- * (spec §5.8). capture() must be called on the main thread (GlassesSessionManager contract) and
+ * [T] is the decoded image type (Bitmap in the app, any type in JVM tests). Frames *and* the
+ * captured photo are decoded on [frameDispatcher] (Dispatchers.Default in the app) so the main
+ * thread never converts pixels (spec §5.8). capture() must be called on the main thread
+ * (GlassesSessionManager contract) and
  * always gives the camera and the owner claim back before returning, also when cancelled.
  */
 class GlassesPhotoCapturer<T : Any>(
@@ -168,7 +170,9 @@ class GlassesPhotoCapturer<T : Any>(
         }
         when (val result = camera.capturePhoto()) {
             is PhotoCaptureResult.Success -> {
-                val image = decodePhoto(result.photo)
+                // capture() runs on the main thread; a full-resolution HEIC must not be decoded
+                // there (spec §5.8) — frames already go through frameDispatcher, the photo now too.
+                val image = withContext(frameDispatcher) { decodePhoto(result.photo) }
                 if (image != null) {
                     Log.d(TAG, "capturePhoto ok")
                     return PhotoCaptureOutcome.Captured(image, fromVideoFrame = false)

@@ -457,7 +457,13 @@ class RTMPStreamingService(private val context: Context) {
         baseTimestampUs = 0
         frameIndex = 0
 
-        _state.value = StreamingState.Idle
+        // Keep a connection/auth failure visible: onConnectionFailedRtmp() sets Error and then calls
+        // stopStreaming() on the RTMP thread, and StateFlow conflates, so overwriting it here made
+        // the Main collector see only Idle (a bad URL or stream key blinked "Connecting" and went
+        // quiet). The next startStreaming() moves the state on to Connecting.
+        if (_state.value !is StreamingState.Error) {
+            _state.value = StreamingState.Idle
+        }
         Log.d(TAG, "RTMP streaming stopped")
     }
 

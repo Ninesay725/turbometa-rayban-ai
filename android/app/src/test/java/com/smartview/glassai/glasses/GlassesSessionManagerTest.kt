@@ -336,6 +336,26 @@ class GlassesSessionManagerTest {
         assertTrue(manager.hasSession)
     }
 
+    /**
+     * A device-initiated stop (fold, tap-and-hold, thermal, Bluetooth loss) must still release the
+     * lent Camera: the borrower's stopCamera() is a no-op afterwards (cameraOwner is already null),
+     * so the SDK Camera — and its MediaCodec decoder — would otherwise only be freed by GC.
+     */
+    @Test
+    fun deviceStoppingSessionStopsTheLentCamera() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        val lent = factory.last.cameras.single()
+        assertEquals(0, lent.stopCalls)
+
+        factory.last.emitStoppedByDevice()
+
+        assertEquals(1, lent.stopCalls)
+        assertNull(manager.currentCameraOwner)
+    }
+
     @Test
     fun sessionErrorsAreForwardedAndDatAppUpdateFlagged() = runTest(UnconfinedTestDispatcher()) {
         val manager = newManager()

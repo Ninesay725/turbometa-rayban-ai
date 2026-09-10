@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Debug-only. The phone camera is never used by the app itself; it exists solely as a
+      MockDeviceKit feed source on the debug MockDeviceKit screen, so release APKs must not
+      declare it (Play listing / user trust). The manifest merger adds these to debug builds only.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+</manifest>
