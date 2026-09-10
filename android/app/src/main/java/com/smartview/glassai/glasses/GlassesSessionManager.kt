@@ -1,0 +1,359 @@
+package com.smartview.glassai.glasses
+
+import android.content.Context
+import android.util.Log
+import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.core.session.DeviceSessionState
+import com.meta.wearable.dat.core.types.DeviceCompatibility
+import com.meta.wearable.dat.core.types.DeviceSessionError
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Single owner of the one DeviceSession the SDK allows per device (spec §4).
+ *
+ * - Reference counted: feature owners call [acquire]/[release]; the session stops when the last
+ *   owner releases.
+ * - Keeps the outgoing session observed until the SDK reports STOPPED and makes
+ *   [ensureSessionStarted] wait for it before Wearables.createSession() (0.9.0: stop() only
+ *   transitions to STOPPING; creating earlier fails with SESSION_ALREADY_EXISTS).
+ * - Lends the single camera capability to one owner at a time ([addCamera] / [stopCamera]).
+ * - Exposes session/display/device state as StateFlows and session errors as a SharedFlow.
+ * - [DisplayAttacher] is the Phase C hook: attach on STARTED, detach before stop.
+ *
+ * Threading: every public function must be called on the main thread. The production scope is
+ * Dispatchers.Main.immediate; unit tests inject a TestScope.
+ */
+class GlassesSessionManager internal constructor(
+    private val sessionFactory: DatSessionFactory,
+    private val deviceObserver: DatDeviceObserver,
+    private val scope: CoroutineScope,
+    private val displayAttacher: DisplayAttacher = DisplayAttacher.None,
+) {
+    companion object {
+        private const val TAG = "GlassesSessionManager"
+
+        /** How long [ensureSessionStarted] waits for the previous session to report STOPPED. */
+        private const val PREVIOUS_STOP_TIMEOUT_MS = 5_000L
+
+        /** Pause before the single retry when createSession() answers SESSION_ALREADY_EXISTS. */
+        private const val ALREADY_EXISTS_RETRY_DELAY_MS = 1_000L
+
+        @Volatile
+        private var instance: GlassesSessionManager? = null
+
+        /** Process singleton. Requires Wearables.initialize() (done in TurboMetaApplication). */
+        fun getInstance(context: Context): GlassesSessionManager =
+            instance ?: synchronized(this) {
+                instance ?: run {
+                    val adapter = WearablesDatAdapter()
+                    GlassesSessionManager(
+                        sessionFactory = adapter,
+                        deviceObserver = adapter,
+                        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+                        displayAttacher = DisplayAttacher.None,
+                    ).also { created ->
+                        created.startMonitoring()
+                        instance = created
+                    }
+                }
+            }
+    }
+
+    private var session: GlassesSession? = null
+    /** The session we last stopped, kept until the SDK reports STOPPED (or the wait times out). */
+    private var stoppingSession: GlassesSession? = null
+    private var stoppingJob: Job? = null
+    private var camera: GlassesCamera? = null
+    private var cameraOwner: String? = null
+    private val owners = LinkedHashSet<String>()
+
+    private var sessionStateJob: Job? = null
+    private var sessionErrorJob: Job? = null
+    private var deviceJob: Job? = null
+
+    private val _sessionState = MutableStateFlow(DeviceSessionState.STOPPED)
+    /**
+     * STOPPED while no session exists; IDLE immediately after a successful createSession; STOPPING
+     * from stopSession() until the SDK reports STOPPED for the outgoing session.
+     */
+    val sessionState: StateFlow<DeviceSessionState> = _sessionState.asStateFlow()
+
+    /** Display capability state (Phase C); always NOT_ATTACHED in Phase A. */
+    val displayState: StateFlow<GlassesDisplayState>
+        get() = displayAttacher.displayState
+
+    private val _sessionError = MutableSharedFlow<DeviceSessionError>(extraBufferCapacity = 16)
+    /** createSession failures and DeviceSession.errors, in order. */
+    val sessionError: SharedFlow<DeviceSessionError> = _sessionError.asSharedFlow()
+
+    private val _activeDevice = MutableStateFlow<GlassesDeviceInfo?>(null)
+    /** Metadata of the AutoDeviceSelector's active device; null when none is connected. */
+    val activeDevice: StateFlow<GlassesDeviceInfo?> = _activeDevice.asStateFlow()
+
+    /** Device.compatibility == DEVICE_UPDATE_REQUIRED → offer Wearables.openFirmwareUpdate(). */
+    val isFirmwareUpdateRequired: StateFlow<Boolean> =
+        _activeDevice
+            .map { it?.compatibility == DeviceCompatibility.DEVICE_UPDATE_REQUIRED }
+            .stateIn(scope, SharingStarted.Eagerly, false)
+
+    private val _isDatAppUpdateRequired = MutableStateFlow(false)
+    /** Set once DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED was seen → offer openDATGlassesAppUpdate(). */
+    val isDatAppUpdateRequired: StateFlow<Boolean> = _isDatAppUpdateRequired.asStateFlow()
+
+    val hasSession: Boolean
+        get() = session != null
+
+    /** True between stopSession() and the SDK's STOPPED for the outgoing session. */
+    val isStoppingPreviousSession: Boolean
+        get() = stoppingSession != null
+
+    val ownerCount: Int
+        get() = owners.size
+
+    val currentCameraOwner: String?
+        get() = cameraOwner
+
+    /** Starts observing the active device. Idempotent. */
+    fun startMonitoring() {
+        if (deviceJob != null) return
+        deviceJob = scope.launch {
+            deviceObserver.activeDeviceInfoFlow().collect { info ->
+                _activeDevice.value = info
+            }
+        }
+    }
+
+    /**
+     * Registers [owner]. Fast path: when no session exists and no previous session is still
+     * stopping, a session is created and started synchronously. Failures are NOT reported here —
+     * owners that need the session call [ensureSessionStarted], which waits for the outgoing
+     * session, retries once on SESSION_ALREADY_EXISTS and reports the final error.
+     */
+    fun acquire(owner: String) {
+        owners.add(owner)
+        Log.d(TAG, "acquire($owner) owners=$owners stoppingPrevious=${stoppingSession != null}")
+        if (session == null && stoppingSession == null) {
+            val error = createSessionIfNeeded()
+            if (error != null) {
+                Log.w(TAG, "acquire($owner): createSession failed (${error.description}); ensureSessionStarted() will retry")
+            }
+        }
+    }
+
+    /** Drops [owner]'s claim (and its camera); stops the session when nobody is left. */
+    fun release(owner: String) {
+        if (!owners.remove(owner)) return
+        Log.d(TAG, "release($owner) owners=$owners")
+        if (cameraOwner == owner) stopCamera(owner)
+        if (owners.isEmpty()) stopSession()
+    }
+
+    /**
+     * Synchronous create + start if no session exists (does not wait for a stopping session).
+     * @return false if the SDK refused; the error is emitted on [sessionError].
+     */
+    fun ensureSession(): Boolean {
+        val error = createSessionIfNeeded() ?: return true
+        _sessionState.value = DeviceSessionState.STOPPED
+        _sessionError.tryEmit(error)
+        return false
+    }
+
+    /**
+     * The call every camera owner makes after [acquire]:
+     * 1. waits (≤ 5 s) for the previous session to report STOPPED,
+     * 2. creates + starts a session if none exists, retrying once after 1 s on SESSION_ALREADY_EXISTS,
+     * 3. waits up to [timeoutMs] for STARTED.
+     * Only the final createSession failure is emitted on [sessionError].
+     */
+    suspend fun ensureSessionStarted(timeoutMs: Long): SessionStartResult {
+        awaitPreviousSessionStopped()
+        var error = createSessionIfNeeded()
+        if (error == DeviceSessionError.SESSION_ALREADY_EXISTS) {
+            Log.w(TAG, "SESSION_ALREADY_EXISTS: SDK still holds the previous session; retrying once")
+            delay(ALREADY_EXISTS_RETRY_DELAY_MS)
+            error = createSessionIfNeeded()
+        }
+        if (error != null) {
+            Log.e(TAG, "ensureSessionStarted: createSession failed: ${error.description}")
+            _sessionState.value = DeviceSessionState.STOPPED
+            _sessionError.tryEmit(error)
+            return SessionStartResult.CREATE_FAILED
+        }
+        return if (awaitStarted(timeoutMs)) SessionStartResult.STARTED else SessionStartResult.NOT_STARTED
+    }
+
+    /**
+     * Suspends until the session is STARTED (true) or STOPPED / timed out / absent (false).
+     * Safe to call right after [acquire]: the state is already IDLE or STARTING by then.
+     */
+    suspend fun awaitStarted(timeoutMs: Long): Boolean {
+        if (session == null) return false
+        val terminal = withTimeoutOrNull(timeoutMs) {
+            sessionState.first {
+                it == DeviceSessionState.STARTED || it == DeviceSessionState.STOPPED
+            }
+        }
+        return terminal == DeviceSessionState.STARTED
+    }
+
+    /** @return null when a session exists afterwards, else the SDK error. Never emits. */
+    private fun createSessionIfNeeded(): DeviceSessionError? {
+        if (session != null) return null
+        return when (val result = sessionFactory.createSession()) {
+            is SessionCreateResult.Success -> {
+                val created = result.session
+                session = created
+                _sessionState.value = DeviceSessionState.IDLE
+                // Subscribe before start() so no transition is missed.
+                sessionStateJob = scope.launch {
+                    created.state.collect { state -> onSessionState(created, state) }
+                }
+                sessionErrorJob = scope.launch {
+                    created.errors.collect { error -> onSessionError(error) }
+                }
+                created.start()
+                null
+            }
+            is SessionCreateResult.Failure -> {
+                Log.e(TAG, "createSession failed: ${result.error.description}")
+                result.error
+            }
+        }
+    }
+
+    /** Waits (bounded) for the outgoing session's STOPPED, then forgets it either way. */
+    private suspend fun awaitPreviousSessionStopped() {
+        val outgoing = stoppingSession ?: return
+        val stopped = withTimeoutOrNull(PREVIOUS_STOP_TIMEOUT_MS) {
+            outgoing.state.first { it == DeviceSessionState.STOPPED }
+        } != null
+        if (!stopped) {
+            Log.w(TAG, "previous session did not report STOPPED within ${PREVIOUS_STOP_TIMEOUT_MS}ms; creating anyway")
+        }
+        clearStopping(outgoing)
+    }
+
+    private fun clearStopping(outgoing: GlassesSession) {
+        if (stoppingSession !== outgoing) return
+        stoppingSession = null
+        stoppingJob?.cancel()
+        stoppingJob = null
+        if (session == null) _sessionState.value = DeviceSessionState.STOPPED
+    }
+
+    /** Lends the camera to [owner]. Must be called after the session is STARTED. */
+    fun addCamera(owner: String, config: StreamConfiguration): CameraResult {
+        val current = session ?: return CameraResult.Failed(CameraError.NoSession)
+        if (_sessionState.value != DeviceSessionState.STARTED) {
+            return CameraResult.Failed(CameraError.SessionNotStarted)
+        }
+        val holder = cameraOwner
+        if (holder != null && holder != owner) {
+            Log.w(TAG, "addCamera($owner) refused: camera held by $holder")
+            return CameraResult.Failed(CameraError.CameraBusy(holder))
+        }
+        camera?.let { existing -> return CameraResult.Ready(existing) }
+        return when (val result = current.addCamera(config)) {
+            is CameraAddResult.Success -> {
+                camera = result.camera
+                cameraOwner = owner
+                Log.d(TAG, "addCamera($owner) ok")
+                CameraResult.Ready(result.camera)
+            }
+            is CameraAddResult.Failure -> {
+                Log.e(TAG, "addCamera($owner) failed: ${result.error.description}")
+                CameraResult.Failed(CameraError.Sdk(result.error))
+            }
+        }
+    }
+
+    /** Stops and detaches the camera if [owner] holds it; ignored otherwise. */
+    fun stopCamera(owner: String) {
+        if (cameraOwner != owner) {
+            if (cameraOwner != null) Log.w(TAG, "stopCamera($owner) ignored: held by $cameraOwner")
+            return
+        }
+        Log.d(TAG, "stopCamera($owner)")
+        camera?.stop()
+        camera = null
+        cameraOwner = null
+    }
+
+    /**
+     * Stops the session and all capabilities regardless of owners. Idempotent.
+     * The outgoing session stays observed until the SDK reports STOPPED (see [ensureSessionStarted]).
+     */
+    fun stopSession() {
+        val current = session ?: return
+        Log.d(TAG, "stopSession")
+        displayAttacher.detach()
+        camera?.stop()
+        camera = null
+        cameraOwner = null
+        cancelSessionJobs()
+        session = null
+        _sessionState.value = DeviceSessionState.STOPPING
+        stoppingJob?.cancel()
+        stoppingSession = current
+        // Subscribe before stop(): a synchronous STOPPED must not be missed.
+        stoppingJob = scope.launch {
+            current.state.first { it == DeviceSessionState.STOPPED }
+            Log.d(TAG, "previous session reported STOPPED")
+            clearStopping(current)
+        }
+        current.stop()
+    }
+
+    private fun onSessionState(source: GlassesSession, state: DeviceSessionState) {
+        if (source !== session) return
+        Log.d(TAG, "session state: $state")
+        _sessionState.value = state
+        when (state) {
+            DeviceSessionState.STARTED -> displayAttacher.maybeAttach(source, _activeDevice.value)
+            DeviceSessionState.STOPPED -> teardownAfterDeviceStop()
+            else -> Unit
+        }
+    }
+
+    private fun onSessionError(error: DeviceSessionError) {
+        Log.e(TAG, "session error: ${error.description}")
+        if (error == DeviceSessionError.DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED) {
+            _isDatAppUpdateRequired.value = true
+        }
+        _sessionError.tryEmit(error)
+    }
+
+    /** The SDK already stopped every capability; just drop our references. Owners keep their claims. */
+    private fun teardownAfterDeviceStop() {
+        displayAttacher.detach()
+        camera = null
+        cameraOwner = null
+        cancelSessionJobs()
+        session = null
+        _sessionState.value = DeviceSessionState.STOPPED
+    }
+
+    private fun cancelSessionJobs() {
+        sessionStateJob?.cancel()
+        sessionStateJob = null
+        sessionErrorJob?.cancel()
+        sessionErrorJob = null
+    }
+}

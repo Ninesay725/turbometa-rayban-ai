@@ -1,0 +1,423 @@
+package com.smartview.glassai.glasses
+
+import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.core.session.DeviceSessionState
+import com.meta.wearable.dat.core.types.DeviceCompatibility
+import com.meta.wearable.dat.core.types.DeviceSessionError
+import com.meta.wearable.dat.core.types.DeviceType
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class GlassesSessionManagerTest {
+
+    private val factory = FakeDatSessionFactory()
+    private val observer = FakeDatDeviceObserver()
+    private val attacher = RecordingDisplayAttacher()
+    private val config = StreamConfiguration()
+
+    private fun TestScope.newManager(displayAttacher: DisplayAttacher = attacher): GlassesSessionManager =
+        GlassesSessionManager(
+            sessionFactory = factory,
+            deviceObserver = observer,
+            scope = backgroundScope,
+            displayAttacher = displayAttacher,
+        ).also { it.startMonitoring() }
+
+    private val rayban = GlassesDeviceInfo(
+        id = "dev-1",
+        name = "Ray-Ban Meta",
+        deviceType = DeviceType.RAYBAN_META,
+        isDisplayCapable = false,
+        compatibility = DeviceCompatibility.COMPATIBLE,
+    )
+
+    @Test
+    fun acquireCreatesAndStartsOneSession() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+
+        manager.acquire("A")
+
+        assertEquals(1, factory.createCalls)
+        assertEquals(1, factory.last.startCalls)
+        assertEquals(DeviceSessionState.STARTING, manager.sessionState.value)
+        assertTrue(manager.hasSession)
+        assertEquals(1, manager.ownerCount)
+    }
+
+    @Test
+    fun secondOwnerSharesTheSession() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        manager.acquire("A") // idempotent per owner
+        manager.acquire("B")
+
+        assertEquals(1, factory.createCalls)
+        assertEquals(2, manager.ownerCount)
+    }
+
+    @Test
+    fun sessionStopsOnlyWhenLastOwnerReleases() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        manager.acquire("B")
+        factory.last.emitStarted()
+
+        manager.release("A")
+        assertEquals(0, factory.last.stopCalls)
+        assertEquals(DeviceSessionState.STARTED, manager.sessionState.value)
+
+        manager.release("B")
+        assertEquals(1, factory.last.stopCalls)
+        assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
+        assertFalse(manager.hasSession)
+        assertEquals(1, attacher.detachCalls)
+    }
+
+    @Test
+    fun releaseOfUnknownOwnerIsNoOp() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+
+        manager.release("ghost")
+
+        assertEquals(1, manager.ownerCount)
+        assertEquals(0, factory.last.stopCalls)
+    }
+
+    @Test
+    fun createFailureIsReportedByEnsureSessionStartedOnly() = runTest(UnconfinedTestDispatcher()) {
+        factory.failure = DeviceSessionError.NO_ELIGIBLE_DEVICE
+        val manager = newManager()
+        val errors = mutableListOf<DeviceSessionError>()
+        backgroundScope.launch { manager.sessionError.collect { errors += it } }
+
+        manager.acquire("A") // fast path fails silently; ensureSessionStarted() retries and reports
+
+        assertEquals(1, factory.createCalls)
+        assertTrue(errors.isEmpty())
+        assertFalse(manager.hasSession)
+        assertEquals(1, manager.ownerCount) // owner keeps its claim
+
+        assertEquals(SessionStartResult.CREATE_FAILED, manager.ensureSessionStarted(1_000))
+
+        assertEquals(2, factory.createCalls)
+        assertEquals(listOf(DeviceSessionError.NO_ELIGIBLE_DEVICE), errors)
+        assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
+        assertFalse(manager.hasSession)
+    }
+
+    @Test
+    fun acquireAfterStopWaitsForStoppedBeforeCreatingSession() = runTest(UnconfinedTestDispatcher()) {
+        factory.stopAsync = true
+        val manager = newManager()
+        manager.acquire("A")
+        val first = factory.last
+        first.emitStarted()
+
+        manager.release("A") // last owner: stop() only reaches STOPPING (real SDK behaviour)
+        assertEquals(DeviceSessionState.STOPPING, first.stateFlow.value)
+        assertEquals(DeviceSessionState.STOPPING, manager.sessionState.value)
+        assertFalse(manager.hasSession)
+        assertTrue(manager.isStoppingPreviousSession)
+
+        manager.acquire("A") // must NOT call createSession while the previous session is stopping
+        assertEquals(1, factory.createCalls)
+
+        val started = async { manager.ensureSessionStarted(5_000) }
+        assertEquals(1, factory.createCalls) // still waiting for STOPPED
+
+        first.emitStoppedByDevice() // the SDK finishes the stop
+        assertFalse(manager.isStoppingPreviousSession)
+        assertEquals(2, factory.createCalls)
+        assertEquals(1, factory.last.startCalls)
+
+        factory.last.emitStarted()
+        assertEquals(SessionStartResult.STARTED, started.await())
+        assertEquals(DeviceSessionState.STARTED, manager.sessionState.value)
+    }
+
+    @Test
+    fun ensureSessionStartedGivesUpWaitingForStoppedAfterTimeout() = runTest(UnconfinedTestDispatcher()) {
+        factory.stopAsync = true
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.release("A")
+        manager.acquire("A")
+
+        val started = async { manager.ensureSessionStarted(5_000) }
+        assertEquals(1, factory.createCalls)
+
+        advanceTimeBy(5_001) // previous session never reports STOPPED
+        assertFalse(manager.isStoppingPreviousSession)
+        assertEquals(2, factory.createCalls)
+
+        factory.last.emitStarted()
+        assertEquals(SessionStartResult.STARTED, started.await())
+    }
+
+    @Test
+    fun sessionAlreadyExistsIsRetriedOnceByEnsureSessionStarted() = runTest(UnconfinedTestDispatcher()) {
+        factory.scriptedFailures += DeviceSessionError.SESSION_ALREADY_EXISTS // acquire() fast path
+        factory.scriptedFailures += DeviceSessionError.SESSION_ALREADY_EXISTS // first ensureSessionStarted() attempt
+        val manager = newManager()
+        val errors = mutableListOf<DeviceSessionError>()
+        backgroundScope.launch { manager.sessionError.collect { errors += it } }
+
+        manager.acquire("A")
+        val started = async { manager.ensureSessionStarted(5_000) }
+        assertEquals(2, factory.createCalls) // retry is scheduled after a 1 s pause
+
+        advanceTimeBy(1_001)
+        assertEquals(3, factory.createCalls)
+        assertTrue(manager.hasSession)
+
+        factory.last.emitStarted()
+        assertEquals(SessionStartResult.STARTED, started.await())
+        assertTrue(errors.isEmpty()) // the retry succeeded, so nothing was reported
+    }
+
+    @Test
+    fun ensureSessionStartedReportsNotStartedWhenSessionStopsOrTimesOut() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+
+        val stoppedResult = async { manager.ensureSessionStarted(5_000) }
+        factory.last.emitStoppedByDevice()
+        assertEquals(SessionStartResult.NOT_STARTED, stoppedResult.await())
+
+        manager.acquire("A") // recreated (2nd session) but never reaches STARTED
+        val timedOut = async { manager.ensureSessionStarted(5_000) }
+        advanceTimeBy(5_001)
+        assertEquals(SessionStartResult.NOT_STARTED, timedOut.await())
+        assertEquals(2, factory.createCalls)
+    }
+
+    @Test
+    fun addCameraBeforeStartedFails() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+
+        val result = manager.addCamera("A", config)
+
+        assertEquals(CameraResult.Failed(CameraError.SessionNotStarted), result)
+    }
+
+    @Test
+    fun addCameraWithoutSessionFails() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+
+        val result = manager.addCamera("A", config)
+
+        assertEquals(CameraResult.Failed(CameraError.NoSession), result)
+    }
+
+    @Test
+    fun cameraIsLentToOneOwnerAndBusyForOthers() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        manager.acquire("B")
+        factory.last.emitStarted()
+
+        val first = manager.addCamera("A", config)
+        assertTrue(first is CameraResult.Ready)
+        assertEquals("A", manager.currentCameraOwner)
+
+        val second = manager.addCamera("B", config)
+        assertEquals(CameraResult.Failed(CameraError.CameraBusy("A")), second)
+        assertEquals(1, factory.last.addCameraCalls)
+
+        // Same owner asking again gets the same camera, no second SDK call.
+        val again = manager.addCamera("A", config)
+        assertSame((first as CameraResult.Ready).camera, (again as CameraResult.Ready).camera)
+        assertEquals(1, factory.last.addCameraCalls)
+    }
+
+    @Test
+    fun stopCameraDetachesAndLetsAnotherOwnerBorrow() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        manager.acquire("B")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+
+        manager.stopCamera("B") // not the holder: ignored
+        assertEquals("A", manager.currentCameraOwner)
+
+        manager.stopCamera("A")
+        assertEquals(1, factory.last.cameras[0].stopCalls)
+        assertNull(manager.currentCameraOwner)
+
+        assertTrue(manager.addCamera("B", config) is CameraResult.Ready)
+        assertEquals("B", manager.currentCameraOwner)
+    }
+
+    @Test
+    fun releaseByCameraOwnerStopsTheCamera() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        manager.acquire("B")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+
+        manager.release("A")
+
+        assertEquals(1, factory.last.cameras[0].stopCalls)
+        assertNull(manager.currentCameraOwner)
+        assertTrue(manager.hasSession) // B still holds the session
+    }
+
+    @Test
+    fun sdkAddCameraFailureIsSurfaced() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        factory.last.nextAddCameraFailure = DeviceSessionError.CAPABILITY_DENIED
+
+        val result = manager.addCamera("A", config)
+
+        assertEquals(CameraResult.Failed(CameraError.Sdk(DeviceSessionError.CAPABILITY_DENIED)), result)
+        assertNull(manager.currentCameraOwner)
+    }
+
+    @Test
+    fun deviceStoppingSessionClearsStateAndNextAcquireRecreates() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+
+        factory.last.emitStoppedByDevice()
+
+        assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
+        assertFalse(manager.hasSession)
+        assertNull(manager.currentCameraOwner)
+        assertEquals(1, attacher.detachCalls)
+        assertEquals(1, manager.ownerCount)
+
+        manager.acquire("A") // no previous session is stopping (the device already reported STOPPED)
+        assertEquals(2, factory.createCalls)
+        assertTrue(manager.hasSession)
+    }
+
+    @Test
+    fun sessionErrorsAreForwardedAndDatAppUpdateFlagged() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        val errors = mutableListOf<DeviceSessionError>()
+        backgroundScope.launch { manager.sessionError.collect { errors += it } }
+        manager.acquire("A")
+
+        factory.last.errorFlow.tryEmit(DeviceSessionError.THERMAL_CRITICAL)
+        assertFalse(manager.isDatAppUpdateRequired.value)
+
+        factory.last.errorFlow.tryEmit(DeviceSessionError.DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED)
+
+        assertEquals(
+            listOf(
+                DeviceSessionError.THERMAL_CRITICAL,
+                DeviceSessionError.DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED,
+            ),
+            errors,
+        )
+        assertTrue(manager.isDatAppUpdateRequired.value)
+    }
+
+    @Test
+    fun awaitStartedResolvesTrueOnStartedAndFalseOnStopped() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        assertFalse(manager.awaitStarted(1_000)) // no session at all
+
+        manager.acquire("A")
+        factory.last.emitStarted()
+        assertTrue(manager.awaitStarted(1_000))
+
+        factory.last.emitStoppedByDevice()
+        manager.acquire("A")
+        factory.last.emitStoppedByDevice()
+        assertFalse(manager.awaitStarted(1_000))
+    }
+
+    @Test
+    fun awaitStartedTimesOut() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.acquire("A") // stays STARTING forever
+
+        assertFalse(manager.awaitStarted(12_000))
+    }
+
+    @Test
+    fun activeDeviceAndFirmwareFlagFollowObserver() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        assertNull(manager.activeDevice.value)
+        assertFalse(manager.isFirmwareUpdateRequired.value)
+
+        observer.device.value = rayban
+        assertEquals(rayban, manager.activeDevice.value)
+        assertFalse(manager.isFirmwareUpdateRequired.value)
+
+        observer.device.value = rayban.copy(compatibility = DeviceCompatibility.DEVICE_UPDATE_REQUIRED)
+        assertTrue(manager.isFirmwareUpdateRequired.value)
+
+        observer.device.value = null
+        assertNull(manager.activeDevice.value)
+        assertFalse(manager.isFirmwareUpdateRequired.value)
+    }
+
+    @Test
+    fun displayAttacherIsCalledOnStartedWithActiveDevice() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        val displayDevice = rayban.copy(
+            deviceType = DeviceType.META_RAYBAN_DISPLAY,
+            isDisplayCapable = true,
+        )
+        observer.device.value = displayDevice
+        manager.acquire("A")
+        assertTrue(attacher.attachCalls.isEmpty())
+
+        factory.last.emitStarted()
+
+        assertEquals(listOf<GlassesDeviceInfo?>(displayDevice), attacher.attachCalls)
+        assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
+    }
+
+    /** Phase A ships DisplayAttacher.None: the display is never attached, even on a display-capable device. */
+    @Test
+    fun defaultAttacherNeverAttachesDisplayEvenForDisplayCapableDevice() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager(displayAttacher = DisplayAttacher.None)
+        observer.device.value = rayban.copy(
+            deviceType = DeviceType.META_RAYBAN_DISPLAY,
+            isDisplayCapable = true,
+        )
+        manager.acquire("A")
+        factory.last.emitStarted()
+        assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
+
+        manager.release("A")
+        assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
+        assertNull(factory.last.nativeSession) // fakes never expose an SDK session for addDisplay()
+    }
+
+    @Test
+    fun stopSessionIsIdempotent() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        manager.stopSession()
+        manager.acquire("A")
+        manager.stopSession()
+        manager.stopSession()
+
+        assertEquals(1, factory.last.stopCalls)
+        assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
+    }
+}
