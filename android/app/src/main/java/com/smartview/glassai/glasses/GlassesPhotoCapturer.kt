@@ -92,13 +92,28 @@ class GlassesPhotoCapturer<T : Any>(
     private suspend fun borrowCameraAndCapture(): PhotoCaptureOutcome<T> {
         // Two attempts: another owner (WearablesViewModel.disconnect()) can stop the shared session
         // while this capture is in flight, which leaves our fresh claim pointing at a session that
-        // is gone. NoSession / SessionNotStarted are therefore re-started once before giving up.
+        // is gone. NoSession / SessionNotStarted (from addCamera) and NOT_STARTED that happened
+        // because the session disappeared mid-wait (from ensureSessionStarted) are therefore
+        // re-started once before giving up.
         var borrowed: GlassesCamera? = null
-        for (attempt in 1..BORROW_ATTEMPTS) {
+        attempts@ for (attempt in 1..BORROW_ATTEMPTS) {
             when (sessionManager.ensureSessionStarted(sessionTimeoutMs)) {
                 SessionStartResult.STARTED -> Unit
                 SessionStartResult.CREATE_FAILED -> return PhotoCaptureOutcome.SessionFailed
-                SessionStartResult.NOT_STARTED -> return PhotoCaptureOutcome.SessionTimeout
+                SessionStartResult.NOT_STARTED -> {
+                    // Distinguish "the session we were waiting on vanished" (a concurrent
+                    // stopSession() drove sessionState to STOPPED, so awaitStarted resolved on
+                    // STOPPED rather than timing out) from a genuine timeout where the session is
+                    // still there, just stuck: only the former is worth retrying — the very next
+                    // ensureSessionStarted() creates a fresh session and can actually succeed.
+                    val sessionGone = !sessionManager.hasSession
+                    if (!sessionGone || attempt == BORROW_ATTEMPTS) {
+                        Log.e(TAG, "ensureSessionStarted: session did not start within ${sessionTimeoutMs}ms")
+                        return PhotoCaptureOutcome.SessionTimeout
+                    }
+                    Log.w(TAG, "ensureSessionStarted returned NOT_STARTED; session disappeared mid-start, retrying once")
+                    continue@attempts
+                }
             }
             when (val result = sessionManager.addCamera(owner, config)) {
                 is CameraResult.Ready -> {

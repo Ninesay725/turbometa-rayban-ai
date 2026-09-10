@@ -139,4 +139,29 @@ class GlassesPhotoCapturerTest {
         assertEquals(0, manager.ownerCount)
         assertEquals(1, factory.last.cameras.single().stopCalls)
     }
+
+    @Test
+    fun retriesOnceWhenSessionDisappearsDuringStart() = runTest(dispatcher) {
+        observer.device.value = rayban
+        factory.nextCaptureResult = PhotoCaptureResult.Success(heicPhoto)
+        val manager = newManager()
+
+        val outcome = async { capturer(manager).capture() }
+        assertEquals(1, factory.createCalls) // acquire() fast path created the first session
+
+        // Simulates WearablesViewModel.disconnect() racing the wake-word capture: the session
+        // disappears while ensureSessionStarted() is still waiting for STARTED.
+        manager.stopSession()
+        assertEquals(2, factory.createCalls) // NOT_STARTED retried once -> a fresh session was created
+
+        factory.last.emitStarted() // the retried ensureSessionStarted resumes -> addCamera -> start
+        val camera = factory.last.cameras.single()
+        assertEquals(1, camera.startCalls)
+
+        camera.stateFlow.value = DatStreamState.STREAMING
+
+        assertEquals(PhotoCaptureOutcome.Captured("photo", fromVideoFrame = false), outcome.await())
+        assertEquals(2, factory.createCalls)
+        assertEquals(0, manager.ownerCount)
+    }
 }

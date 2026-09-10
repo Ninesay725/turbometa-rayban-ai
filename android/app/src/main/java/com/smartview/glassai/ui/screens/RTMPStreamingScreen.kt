@@ -283,6 +283,10 @@ fun RTMPStreamingScreen(
                     Button(
                         onClick = {
                             if (isStreaming || isConnecting) {
+                                // Clear any lingering error first so an explicit user stop always
+                                // reaches Idle (stopStreaming() keeps an Error state visible when
+                                // it was set just before the stop, e.g. a stream failure).
+                                viewModel.clearError()
                                 viewModel.stopStreaming()
                             } else {
                                 viewModel.startStreaming()

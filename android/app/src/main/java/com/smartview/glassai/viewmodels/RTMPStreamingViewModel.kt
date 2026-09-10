@@ -406,7 +406,13 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         frameTimestampBase = 0L
         _previewFrame.value = null
         _cameraState.value = null
-        _uiState.value = UIState.Idle
+        // A stream error must stay visible: the STOPPED transition that normally follows a stream
+        // error (attachCamera's stateJob, hasBeenActive branch) must not blink the error away by
+        // falling back to Idle here. An explicit user-initiated stop clears the error first (see
+        // RTMPStreamingScreen's Stop button), so that path still reaches Idle.
+        if (_uiState.value !is UIState.Error) {
+            _uiState.value = UIState.Idle
+        }
     }
 
     fun clearError() {
