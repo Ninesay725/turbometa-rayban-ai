@@ -382,4 +382,16 @@
     <string name="prompt_liveai_blind">You are an AI assistant for visually impaired users wearing smart glasses.\n\n[IMPORTANT] Always respond in English.\n\nYour task is to help users understand their surroundings:\n1. Describe objects, people, and environment in detail\n2. Use clear directional words (ahead, left, behind right, etc.)\n3. Point out obstacles or dangers\n4. Read signs, menus, and other text\n5. Provide safe, practical navigation advice\n\nSpeak clearly and prioritize the most important information.</string>
     <string name="prompt_liveai_reading">You are a reading assistant AI.\n\n[IMPORTANT] Always respond in English.\n\nYour task is to help users read visible text:\n1. Accurately recognize and read all visible text\n2. Organize content in correct reading order\n3. For documents, explain the structure\n4. For foreign languages, read first then translate\n\nSpeak at moderate pace, clearly, like a professional reader.</string>
     <string name="prompt_liveai_translate">You are a real-time translation AI assistant.\n\n[IMPORTANT] Translation results must be in {LANGUAGE}.\n\nYour task is to help users understand foreign language content:\n1. Recognize text in the image\n2. Translate to {LANGUAGE}\n3. For menus or signs, explain their purpose\n4. Provide simple explanations for technical terms\n\nTranslations should be accurate, natural, and idiomatic.</string>
+
+    <!-- Phase A: glasses session (DAT 0.9.0) -->
+    <string name="error_activity_unavailable">Can\'t open right now. Try again.</string>
+    <string name="update_firmware">Update firmware</string>
+    <string name="update_dat_app">Update glasses app</string>
+    <string name="update_required_firmware">Your glasses need a firmware update before they can be used.</string>
+    <string name="update_required_dat_app">The Device Access Toolkit app on your glasses needs an update.</string>
+    <string name="glasses_session_failed">Could not start the glasses session</string>
+    <string name="glasses_session_timeout">Timed out waiting for the glasses</string>
+    <string name="glasses_camera_busy">The glasses camera is being used by another feature</string>
+    <string name="glasses_no_session">No active glasses session</string>
+    <string name="photo_capture_failed">Photo capture failed</string>
 </resources>

@@ -1,5 +1,6 @@
 package com.smartview.glassai.viewmodels
 
+import android.app.Activity
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -9,44 +10,52 @@ import android.graphics.YuvImage
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.meta.wearable.dat.camera.StreamSession
-import com.meta.wearable.dat.camera.startStreamSession
+import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
-import com.meta.wearable.dat.camera.types.StreamSessionState
+import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
 import com.meta.wearable.dat.core.Wearables
-import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
-import com.smartview.glassai.utils.APIKeyManager
-import com.meta.wearable.dat.core.selectors.DeviceSelector
 import com.meta.wearable.dat.core.types.DeviceIdentifier
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationState
+import com.smartview.glassai.R
+import com.smartview.glassai.glasses.CameraError
+import com.smartview.glassai.glasses.CameraResult
+import com.smartview.glassai.glasses.GlassesCamera
+import com.smartview.glassai.glasses.GlassesDeviceInfo
+import com.smartview.glassai.glasses.GlassesSessionManager
+import com.smartview.glassai.glasses.PhotoCaptureResult
+import com.smartview.glassai.glasses.SessionStartResult
+import com.smartview.glassai.utils.APIKeyManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
 /**
- * WearablesViewModel - Core DAT SDK Integration
+ * WearablesViewModel - UI-facing DAT SDK façade (DAT 0.9.0).
  *
- * This ViewModel demonstrates the core DAT API patterns for:
- * - Device registration and unregistration using the DAT SDK
- * - Permission management for wearable devices
- * - Device discovery and state management
- * - Video streaming from wearable devices
+ * - Registration / unregistration (needs a real Activity: the 0.4.0 code passed the Application
+ *   and crashed with ClassCastException).
+ * - Device discovery + active-device metadata via GlassesSessionManager.
+ * - Camera streaming borrowed from the shared GlassesSessionManager (one DeviceSession per device).
  *
- * Based on iOS StreamSessionViewModel pattern:
- * - Single session instance, reused with start/stop
- * - Proper cleanup on view disposal
+ * The public contract (StreamState sealed class, currentFrame, startStream/stopStream/takePhoto,
+ * capturedPhoto, hasActiveDevice, connectionState, isRegistered) is unchanged for the screens.
  */
 class WearablesViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "WearablesViewModel"
+        private const val OWNER = "WearablesViewModel"
+        private const val SESSION_START_TIMEOUT_MS = 12_000L
+        private const val FRAME_RATE = 24
     }
 
     // Connection states
@@ -59,11 +68,12 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         data class Error(val message: String) : ConnectionState()
     }
 
-    // Streaming status (matching iOS StreamingStatus enum)
+    // Streaming status (app-level; the SDK's StreamState is imported as DatStreamState)
     sealed class StreamState {
         object Stopped : StreamState()
-        object Waiting : StreamState()  // starting, stopping, paused
+        object Waiting : StreamState()  // starting, stopping
         object Streaming : StreamState()
+        object Paused : StreamState()   // paused by a cap-touch tap on the glasses
         data class Error(val message: String) : StreamState()
     }
 
@@ -71,7 +81,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _registrationState = MutableStateFlow<RegistrationState>(RegistrationState.Unavailable())
+    private val _registrationState = MutableStateFlow(RegistrationState.UNAVAILABLE)
     val registrationState: StateFlow<RegistrationState> = _registrationState.asStateFlow()
 
     private val _streamState = MutableStateFlow<StreamState>(StreamState.Stopped)
@@ -98,16 +108,31 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
-    // DAT SDK components
-    val deviceSelector: DeviceSelector = AutoDeviceSelector()
+    // Shared session owner (spec §4)
+    private val sessionManager: GlassesSessionManager by lazy {
+        GlassesSessionManager.getInstance(getApplication())
+    }
 
-    // Stream session - can be null when not streaming
-    // Following Android SDK pattern: create new session each time, close when done
-    private var streamSession: StreamSession? = null
+    /** Active device metadata: name, type, display capability, compatibility (spec §5.7). */
+    val activeDevice: StateFlow<GlassesDeviceInfo?>
+        get() = sessionManager.activeDevice
+
+    /** Device.compatibility == DEVICE_UPDATE_REQUIRED -> show "Update firmware". */
+    val isFirmwareUpdateRequired: StateFlow<Boolean>
+        get() = sessionManager.isFirmwareUpdateRequired
+
+    /** DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED seen -> show "Update glasses app". */
+    val isDatAppUpdateRequired: StateFlow<Boolean>
+        get() = sessionManager.isDatAppUpdateRequired
+
+    // Borrowed camera (null when not streaming)
+    private var camera: GlassesCamera? = null
 
     // Coroutine jobs for stream management
+    private var startJob: Job? = null
     private var videoJob: Job? = null
-    private var stateJob: Job? = null
+    private var streamStateJob: Job? = null
+    private var streamErrorJob: Job? = null
     private var deviceSelectorJob: Job? = null
     private var monitoringStarted = false
 
@@ -119,66 +144,86 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         if (monitoringStarted) return
         monitoringStarted = true
 
-        Log.d(TAG, "🟢 Starting monitoring")
+        Log.d(TAG, "Starting monitoring")
 
-        // Monitor device selector for active device
-        deviceSelectorJob = viewModelScope.launch {
-            deviceSelector.activeDevice(Wearables.devices).collect { device ->
-                Log.d(TAG, "📱 Device changed: ${if (device != null) "connected" else "disconnected"}")
-                _hasActiveDevice.value = device != null
-
-                if (device != null) {
-                    // Device is registered, but may not be actively connected
-                    if (_connectionState.value !is ConnectionState.Connected) {
-                        _connectionState.value = ConnectionState.Registered(device.toString())
-                    }
-                } else if (_connectionState.value is ConnectionState.Connected ||
-                           _connectionState.value is ConnectionState.Registered) {
+        // 1. Registration errors FIRST: registrationErrorStream is hot with no replay, so it must be
+        //    collected before the user can tap Connect.
+        viewModelScope.launch {
+            Wearables.registrationErrorStream.collect { error ->
+                Log.e(TAG, "Registration error: ${error.description}")
+                setError(error.getLocalizedDescription(getApplication()))
+                if (_connectionState.value is ConnectionState.Searching ||
+                    _connectionState.value is ConnectionState.Connecting
+                ) {
                     _connectionState.value = ConnectionState.Disconnected
                 }
             }
         }
 
-        // Monitor registration state
+        // 2. Registration state (plain enum in 0.9.0)
         viewModelScope.launch {
             Wearables.registrationState.collect { state ->
-                Log.d(TAG, "📊 Registration state changed: $state")
+                Log.d(TAG, "Registration state changed: $state")
                 _registrationState.value = state
                 when (state) {
-                    is RegistrationState.Registered -> {
-                        Log.d(TAG, "✅ Device registered")
-                    }
-                    is RegistrationState.Unavailable -> {
-                        Log.d(TAG, "❌ Registration unavailable")
+                    RegistrationState.REGISTERED -> Log.d(TAG, "Device registered")
+                    RegistrationState.UNAVAILABLE -> {
+                        Log.d(TAG, "Registration unavailable")
                         _connectionState.value = ConnectionState.Disconnected
                     }
-                    is RegistrationState.Available -> {
-                        Log.d(TAG, "📱 Registration available")
+                    RegistrationState.AVAILABLE -> {
+                        Log.d(TAG, "Registration available")
+                        if (_connectionState.value is ConnectionState.Connecting) {
+                            _connectionState.value = ConnectionState.Disconnected
+                        }
                     }
-                    is RegistrationState.Registering -> {
-                        Log.d(TAG, "⏳ Registering...")
+                    RegistrationState.REGISTERING -> {
+                        Log.d(TAG, "Registering...")
                         _connectionState.value = ConnectionState.Connecting
                     }
-                    is RegistrationState.Unregistering -> {
-                        Log.d(TAG, "⏳ Unregistering...")
-                    }
+                    RegistrationState.UNREGISTERING -> Log.d(TAG, "Unregistering...")
                 }
             }
         }
 
-        // Monitor available devices
+        // 3. Available devices
         viewModelScope.launch {
             Wearables.devices.collect { deviceSet ->
-                Log.d(TAG, "📱 Devices changed: ${deviceSet.size} devices")
+                Log.d(TAG, "Devices changed: ${deviceSet.size} devices")
                 _devices.value = deviceSet.toList()
+            }
+        }
+
+        // 4. Active device (AutoDeviceSelector + devicesMetadata, via the session manager)
+        deviceSelectorJob = viewModelScope.launch {
+            sessionManager.activeDevice.collect { info ->
+                Log.d(TAG, "Active device: ${info?.name ?: "none"} (${info?.deviceType})")
+                _hasActiveDevice.value = info != null
+
+                if (info != null) {
+                    if (_connectionState.value !is ConnectionState.Connected) {
+                        _connectionState.value = ConnectionState.Registered(info.name)
+                    }
+                } else if (_connectionState.value is ConnectionState.Connected ||
+                    _connectionState.value is ConnectionState.Registered
+                ) {
+                    _connectionState.value = ConnectionState.Disconnected
+                }
+            }
+        }
+
+        // 5. Session errors (createSession failures + DeviceSession.errors)
+        viewModelScope.launch {
+            sessionManager.sessionError.collect { error ->
+                setError(error.getLocalizedDescription(getApplication()))
             }
         }
     }
 
-    fun startDeviceSearch() {
-        Log.d(TAG, "🔍 Starting device search")
+    fun startDeviceSearch(activity: Activity) {
+        Log.d(TAG, "Starting device search")
         _connectionState.value = ConnectionState.Searching
-        startRegistration()
+        startRegistration(activity)
     }
 
     fun stopDeviceSearch() {
@@ -187,22 +232,39 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun startRegistration() {
-        Log.d(TAG, "📝 Starting registration")
-        Wearables.startRegistration(getApplication())
+    fun startRegistration(activity: Activity) {
+        Log.d(TAG, "Starting registration")
+        Wearables.startRegistration(activity)
     }
 
-    fun startUnregistration() {
-        Log.d(TAG, "📝 Starting unregistration")
-        Wearables.startUnregistration(getApplication())
+    fun startUnregistration(activity: Activity) {
+        Log.d(TAG, "Starting unregistration")
+        Wearables.startUnregistration(activity)
     }
 
-    fun disconnect() {
+    fun disconnect(activity: Activity) {
         viewModelScope.launch {
             stopStream()
-            startUnregistration()
+            sessionManager.stopSession()
+            startUnregistration(activity)
             _connectionState.value = ConnectionState.Disconnected
             _batteryLevel.value = null
+        }
+    }
+
+    /** Opens the Meta AI app's firmware update flow (Device.compatibility == DEVICE_UPDATE_REQUIRED). */
+    fun openFirmwareUpdate(activity: Activity) {
+        Wearables.openFirmwareUpdate(activity).onFailure { error, _ ->
+            // NavigationError is not part of GlassesErrorMessages (spec §5.9 covers Stream/Session errors);
+            // the SDK's own localized text is used so the message still follows the device language.
+            setError(error.getLocalizedDescription(getApplication()))
+        }
+    }
+
+    /** Opens the Meta AI app's DAT-glasses-app update flow (DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED). */
+    fun openDATGlassesAppUpdate(activity: Activity) {
+        Wearables.openDATGlassesAppUpdate(activity).onFailure { error, _ ->
+            setError(error.getLocalizedDescription(getApplication()))
         }
     }
 
@@ -224,14 +286,9 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
             }
 
             // Request permission
-            val requestedPermissionStatus = onRequestWearablesPermission(permission)
-            when (requestedPermissionStatus) {
-                PermissionStatus.Denied -> {
-                    setError("Permission denied")
-                }
-                PermissionStatus.Granted -> {
-                    _isStreaming.value = true
-                }
+            when (onRequestWearablesPermission(permission)) {
+                PermissionStatus.Denied -> setError("Permission denied")
+                PermissionStatus.Granted -> _isStreaming.value = true
             }
         }
     }
@@ -247,111 +304,138 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Start streaming from the wearable device camera
-     * Following Android SDK sample pattern: create new session, collect streams
+     * Start streaming from the wearable device camera through the shared session:
+     * acquire -> ensureSessionStarted (waits for a previous session's STOPPED, creates, waits STARTED)
+     * -> addCamera -> subscribe -> stream.start().
      */
     fun startStream() {
-        Log.d(TAG, "🚀 startStream START")
+        Log.d(TAG, "startStream START")
 
-        // Cancel any existing jobs first
-        videoJob?.cancel()
-        videoJob = null
-        stateJob?.cancel()
-        stateJob = null
-
-        // Close any existing session
-        streamSession?.let { oldSession ->
-            Log.d(TAG, "⚠️ Closing previous session before starting new one")
-            oldSession.close()
-        }
-        streamSession = null
+        cancelStreamJobs()
+        camera = null
+        sessionManager.stopCamera(OWNER)
 
         // Reset state
         _currentFrame.value = null
         _streamState.value = StreamState.Waiting
 
         // Get saved video quality setting
-        val apiKeyManager = APIKeyManager.getInstance(getApplication())
-        val savedQuality = apiKeyManager.getVideoQuality()
+        val savedQuality = APIKeyManager.getInstance(getApplication()).getVideoQuality()
         val videoQuality = when (savedQuality) {
             "LOW" -> VideoQuality.LOW
             "HIGH" -> VideoQuality.HIGH
             else -> VideoQuality.MEDIUM
         }
-        Log.d(TAG, "🎥 Using video quality: $savedQuality")
+        Log.d(TAG, "Using video quality: $savedQuality")
 
-        // Create new session (Android SDK pattern)
-        val session = Wearables.startStreamSession(
-            getApplication(),
-            deviceSelector,
-            StreamConfiguration(videoQuality = videoQuality, 24)
-        ).also { streamSession = it }
+        startJob = viewModelScope.launch {
+            sessionManager.acquire(OWNER)
+            // Leave-and-re-enter: the previous session may still be STOPPING in the SDK, so the
+            // create happens inside ensureSessionStarted() once STOPPED has been observed.
+            when (sessionManager.ensureSessionStarted(SESSION_START_TIMEOUT_MS)) {
+                SessionStartResult.STARTED -> Unit
+                SessionStartResult.CREATE_FAILED -> {
+                    Log.e(TAG, "createSession failed")
+                    _streamState.value = StreamState.Error(
+                        getApplication<Application>().getString(R.string.glasses_session_failed)
+                    )
+                    sessionManager.release(OWNER)
+                    return@launch
+                }
+                SessionStartResult.NOT_STARTED -> {
+                    Log.e(TAG, "session did not reach STARTED")
+                    _streamState.value = StreamState.Error(
+                        getApplication<Application>().getString(R.string.glasses_session_timeout)
+                    )
+                    sessionManager.release(OWNER)
+                    return@launch
+                }
+            }
+            val config = StreamConfiguration(videoQuality = videoQuality, frameRate = FRAME_RATE)
+            when (val result = sessionManager.addCamera(OWNER, config)) {
+                is CameraResult.Ready -> attachCamera(result.camera)
+                is CameraResult.Failed -> {
+                    Log.e(TAG, "addCamera failed: ${result.error}")
+                    _streamState.value = StreamState.Error(cameraErrorMessage(result.error))
+                    sessionManager.release(OWNER)
+                }
+            }
+        }
 
-        Log.d(TAG, "🎥 StreamSession created")
+        Log.d(TAG, "startStream END")
+    }
 
-        // Collect video frames
+    private fun attachCamera(borrowed: GlassesCamera) {
+        camera = borrowed
+
+        // Subscribe BEFORE start(): streamState is a StateFlow that replays STOPPED.
         videoJob = viewModelScope.launch {
-            Log.d(TAG, "🎥 Starting video frame collection")
-            session.videoStream.collect { videoFrame ->
+            Log.d(TAG, "Starting video frame collection")
+            borrowed.videoFrames.collect { videoFrame ->
+                if (videoFrame.isCompressed || videoFrame.isCodecConfig) return@collect
                 handleVideoFrame(videoFrame)
             }
         }
 
-        // Monitor stream state
-        stateJob = viewModelScope.launch {
-            var prevState: StreamSessionState? = null
-            session.state.collect { currentState ->
-                Log.d(TAG, "📊 Stream state: $currentState (prev: $prevState)")
-
+        streamStateJob = viewModelScope.launch {
+            var hasBeenActive = false
+            borrowed.streamState.collect { currentState ->
+                Log.d(TAG, "Stream state: $currentState")
                 when (currentState) {
-                    StreamSessionState.STREAMING -> {
+                    DatStreamState.STREAMING -> {
+                        hasBeenActive = true
                         _streamState.value = StreamState.Streaming
                         // Upgrade connection state to Connected when streaming confirmed
                         val currentConnection = _connectionState.value
                         if (currentConnection is ConnectionState.Registered) {
                             _connectionState.value = ConnectionState.Connected(currentConnection.deviceName)
-                            Log.d(TAG, "✅ Upgraded to Connected (streaming confirmed)")
+                            Log.d(TAG, "Upgraded to Connected (streaming confirmed)")
                         }
                     }
-                    StreamSessionState.STOPPED -> {
-                        // When stream transitions to STOPPED, clean up (as per SDK sample)
-                        if (prevState != null && prevState != StreamSessionState.STOPPED) {
-                            Log.d(TAG, "⏹️ Stream transitioned to STOPPED, calling stopStream()")
+                    DatStreamState.STARTING,
+                    DatStreamState.STARTED,
+                    DatStreamState.STOPPING,
+                    DatStreamState.PAUSED -> {
+                        hasBeenActive = true
+                        _streamState.value = StreamState.Waiting
+                    }
+                    DatStreamState.STOPPED,
+                    DatStreamState.CLOSED -> {
+                        if (hasBeenActive) {
+                            hasBeenActive = false
+                            Log.d(TAG, "Stream terminated, calling stopStream()")
                             stopStream()
                         }
-                        _streamState.value = StreamState.Stopped
-                    }
-                    StreamSessionState.STARTING -> {
-                        _streamState.value = StreamState.Waiting
-                    }
-                    else -> {
-                        Log.d(TAG, "📊 Other stream state: $currentState")
-                        _streamState.value = StreamState.Waiting
                     }
                 }
-                prevState = currentState
             }
         }
 
-        Log.d(TAG, "🚀 startStream END")
+        streamErrorJob = viewModelScope.launch {
+            borrowed.streamErrors.collect { error ->
+                Log.e(TAG, "Stream error: ${error.description}")
+                setError(error.getLocalizedDescription(getApplication()))
+            }
+        }
+
+        val startError = borrowed.startStream()
+        if (startError != null) {
+            Log.e(TAG, "stream.start failed: ${startError.description}")
+            _streamState.value = StreamState.Error(startError.getLocalizedDescription(getApplication()))
+            stopStream()
+        }
     }
 
     /**
-     * Stop streaming and release all resources
-     * Following iOS stopSession() pattern
+     * Stop streaming and give the camera + session claim back to the manager.
      */
     fun stopStream() {
-        Log.d(TAG, "⏹️ stopStream START")
+        Log.d(TAG, "stopStream START")
 
-        // Cancel jobs first
-        videoJob?.cancel()
-        videoJob = null
-        stateJob?.cancel()
-        stateJob = null
-
-        // Close session to stop the camera on glasses
-        streamSession?.close()
-        streamSession = null
+        cancelStreamJobs()
+        camera = null
+        sessionManager.stopCamera(OWNER)
+        sessionManager.release(OWNER)
 
         // Clear frame (let GC handle bitmap)
         _currentFrame.value = null
@@ -361,52 +445,79 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         val currentConnection = _connectionState.value
         if (currentConnection is ConnectionState.Connected) {
             _connectionState.value = ConnectionState.Registered(currentConnection.deviceName)
-            Log.d(TAG, "📱 Downgraded to Registered (stream stopped)")
+            Log.d(TAG, "Downgraded to Registered (stream stopped)")
         }
 
-        Log.d(TAG, "⏹️ stopStream END")
+        Log.d(TAG, "stopStream END")
+    }
+
+    private fun cancelStreamJobs() {
+        startJob?.cancel()
+        startJob = null
+        videoJob?.cancel()
+        videoJob = null
+        streamStateJob?.cancel()
+        streamStateJob = null
+        streamErrorJob?.cancel()
+        streamErrorJob = null
+    }
+
+    private fun cameraErrorMessage(error: CameraError): String {
+        val app = getApplication<Application>()
+        return when (error) {
+            is CameraError.CameraBusy -> app.getString(R.string.glasses_camera_busy)
+            CameraError.NoSession -> app.getString(R.string.glasses_no_session)
+            CameraError.SessionNotStarted -> app.getString(R.string.glasses_session_timeout)
+            is CameraError.Sdk -> error.error.getLocalizedDescription(app)
+        }
     }
 
     /**
-     * Capture a photo from the stream
+     * Capture a photo from the stream (DatResult<PhotoData, CaptureError> in 0.9.0).
+     * Returns the previously captured photo synchronously; the new one lands in [capturedPhoto].
      */
     fun takePhoto(): Bitmap? {
-        if (_streamState.value != StreamState.Streaming) {
-            Log.w(TAG, "⚠️ Cannot take photo: not streaming")
+        val activeCamera = camera
+        if (activeCamera == null || _streamState.value != StreamState.Streaming) {
+            Log.w(TAG, "Cannot take photo: not streaming")
             return null
         }
 
         viewModelScope.launch {
-            try {
-                Log.d(TAG, "📸 Capturing photo...")
-                streamSession?.capturePhoto()
-                    ?.onSuccess { photoData ->
-                        val bitmap = when (photoData) {
-                            is com.meta.wearable.dat.camera.types.PhotoData.Bitmap -> photoData.bitmap
-                            is com.meta.wearable.dat.camera.types.PhotoData.HEIC -> {
-                                val byteArray = ByteArray(photoData.data.remaining())
-                                photoData.data.get(byteArray)
-                                BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
-                            }
-                        }
-                        Log.d(TAG, "📸 Photo captured: ${bitmap.width}x${bitmap.height}")
+            Log.d(TAG, "Capturing photo...")
+            when (val result = activeCamera.capturePhoto()) {
+                is PhotoCaptureResult.Success -> {
+                    val bitmap = withContext(Dispatchers.Default) { decodePhoto(result.photo) }
+                    if (bitmap == null) {
+                        Log.e(TAG, "Photo decode failed")
+                        _errorMessage.value = getApplication<Application>().getString(R.string.photo_capture_failed)
+                    } else {
+                        Log.d(TAG, "Photo captured: ${bitmap.width}x${bitmap.height}")
                         _capturedPhoto.value = bitmap
                         onPhotoTaken?.invoke(bitmap)
                     }
-                    ?.onFailure {
-                        Log.e(TAG, "❌ Photo capture failed")
-                        _errorMessage.value = "Photo capture failed"
-                    }
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to take photo: ${e.message}")
+                }
+                is PhotoCaptureResult.Failure -> {
+                    Log.e(TAG, "Photo capture failed: ${result.error.description}")
+                    _errorMessage.value = result.error.getLocalizedDescription(getApplication())
+                }
             }
         }
         return _capturedPhoto.value
     }
 
+    private fun decodePhoto(photo: PhotoData): Bitmap? = when (photo) {
+        is PhotoData.Bitmap -> photo.bitmap
+        is PhotoData.HEIC -> {
+            val buffer = photo.data.duplicate().apply { rewind() }
+            val byteArray = ByteArray(buffer.remaining())
+            buffer.get(byteArray)
+            BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
+        }
+    }
+
     /**
-     * Handle incoming video frames
-     * Following SDK sample pattern with ByteArrayOutputStream.use{}
+     * Handle incoming (uncompressed YUV, treated as I420) video frames.
      */
     private fun handleVideoFrame(videoFrame: VideoFrame) {
         try {
@@ -424,7 +535,6 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
             val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
             val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
 
-            // Use .use{} to auto-close the stream (as per SDK sample)
             val jpegBytes = ByteArrayOutputStream().use { stream ->
                 image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
                 stream.toByteArray()
@@ -432,11 +542,10 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
 
             val newBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
 
-            // Update the state (let GC handle old bitmap as per SDK sample)
             _currentFrame.value = newBitmap
             onFrameReceived?.invoke(newBitmap)
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error handling video frame: ${e.message}")
+            Log.e(TAG, "Error handling video frame: ${e.message}")
         }
     }
 
@@ -467,26 +576,21 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         _errorMessage.value = message
     }
 
-    // Check if registered with Meta AI app
+    // Check if registered with Meta AI app (UNREGISTERING still counts as registered, like the sample)
     val isRegistered: Boolean
-        get() = _registrationState.value is RegistrationState.Registered
+        get() = _registrationState.value == RegistrationState.REGISTERED ||
+            _registrationState.value == RegistrationState.UNREGISTERING
 
-    /**
-     * Full cleanup of all resources
-     * Following iOS cleanup() pattern - call when ViewModel is no longer needed
-     */
     override fun onCleared() {
-        Log.d(TAG, "🔴 onCleared START - cleaning up all resources")
+        Log.d(TAG, "onCleared START - cleaning up all resources")
         super.onCleared()
 
-        // Stop stream first to release camera resources
         stopStream()
 
-        // Cancel device monitoring
         deviceSelectorJob?.cancel()
         deviceSelectorJob = null
         monitoringStarted = false
 
-        Log.d(TAG, "🔴 onCleared END - cleanup complete")
+        Log.d(TAG, "onCleared END - cleanup complete")
     }
 }

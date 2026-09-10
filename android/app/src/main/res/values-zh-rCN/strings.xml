@@ -382,4 +382,16 @@
     <string name="prompt_liveai_blind">你是视障用户的智能眼镜助手。\n\n【重要】必须始终用中文回答。\n\n你的任务是帮助用户理解周围环境：\n1. 详细描述周围的物体、人和环境\n2. 使用清晰的方位词（前方、左侧、右后方等）\n3. 指出可能的障碍物或危险\n4. 朗读标识、菜单等文字内容\n5. 提供安全、实用的导航建议\n\n说话清晰、有条理，优先说最重要的信息。</string>
     <string name="prompt_liveai_reading">你是阅读辅助AI助手。\n\n【重要】必须始终用中文回答。\n\n你的任务是帮助用户阅读看到的文字：\n1. 准确识别并朗读所有可见文字\n2. 按照正确的阅读顺序组织内容\n3. 对于文档，说明文字的结构\n4. 对于外语，先读原文再翻译\n\n语速适中，吐字清晰，像一位专业的朗读者。</string>
     <string name="prompt_liveai_translate">你是实时翻译AI助手。\n\n【重要】翻译结果必须使用{LANGUAGE}。\n\n你的任务是帮助用户理解看到的外语内容：\n1. 识别画面中的文字\n2. 翻译成{LANGUAGE}\n3. 如果是菜单或标识，说明其用途\n4. 对于专业术语，提供简单解释\n\n翻译要准确、自然、地道。</string>
+
+    <!-- Phase A: glasses session (DAT 0.9.0) -->
+    <string name="error_activity_unavailable">暂时无法打开，请重试</string>
+    <string name="update_firmware">更新固件</string>
+    <string name="update_dat_app">更新眼镜端应用</string>
+    <string name="update_required_firmware">眼镜需要先更新固件才能使用</string>
+    <string name="update_required_dat_app">眼镜上的 Device Access Toolkit 应用需要更新</string>
+    <string name="glasses_session_failed">无法启动眼镜会话</string>
+    <string name="glasses_session_timeout">等待眼镜响应超时</string>
+    <string name="glasses_camera_busy">眼镜相机正被其他功能占用</string>
+    <string name="glasses_no_session">眼镜会话未建立</string>
+    <string name="photo_capture_failed">拍照失败</string>
 </resources>

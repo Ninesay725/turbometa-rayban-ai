@@ -1,5 +1,8 @@
 package com.smartview.glassai.ui.screens
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -57,6 +60,20 @@ fun HomeScreen(
     val apiKeyManager = remember { APIKeyManager.getInstance(context) }
     val connectionState by wearablesViewModel.connectionState.collectAsState()
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
+    val isFirmwareUpdateRequired by wearablesViewModel.isFirmwareUpdateRequired.collectAsState()
+    val isDatAppUpdateRequired by wearablesViewModel.isDatAppUpdateRequired.collectAsState()
+
+    // Registration / update flows need a real Activity (LocalActivity: activity-compose >= 1.10)
+    val activity = LocalActivity.current
+    val activityUnavailableText = stringResource(R.string.error_activity_unavailable)
+    fun withActivity(block: (Activity) -> Unit) {
+        val current = activity
+        if (current == null) {
+            Toast.makeText(context, activityUnavailableText, Toast.LENGTH_SHORT).show()
+        } else {
+            block(current)
+        }
+    }
 
     // API Key dialog state
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -165,7 +182,7 @@ fun HomeScreen(
                 Button(
                     onClick = {
                         showDeviceNotConnectedDialog = false
-                        wearablesViewModel.startDeviceSearch()
+                        withActivity { wearablesViewModel.startDeviceSearch(it) }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
                 ) {
@@ -253,8 +270,12 @@ fun HomeScreen(
             // Device Connection Card
             DeviceStatusCard(
                 connectionState = connectionState,
-                onConnect = { wearablesViewModel.startDeviceSearch() },
-                onDisconnect = { wearablesViewModel.disconnect() },
+                isFirmwareUpdateRequired = isFirmwareUpdateRequired,
+                isDatAppUpdateRequired = isDatAppUpdateRequired,
+                onConnect = { withActivity { wearablesViewModel.startDeviceSearch(it) } },
+                onDisconnect = { withActivity { wearablesViewModel.disconnect(it) } },
+                onUpdateFirmware = { withActivity { wearablesViewModel.openFirmwareUpdate(it) } },
+                onUpdateDatApp = { withActivity { wearablesViewModel.openDATGlassesAppUpdate(it) } },
                 modifier = Modifier.padding(horizontal = AppSpacing.large)
             )
 
@@ -577,8 +598,12 @@ private fun FeatureCardWide(
 @Composable
 private fun DeviceStatusCard(
     connectionState: WearablesViewModel.ConnectionState,
+    isFirmwareUpdateRequired: Boolean,
+    isDatAppUpdateRequired: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onUpdateFirmware: () -> Unit,
+    onUpdateDatApp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // iOS doesn't distinguish between Registered and Connected on home screen
@@ -626,90 +651,145 @@ private fun DeviceStatusCard(
         ),
         onClick = if (hasDevice) { { showDisconnectDialog = true } } else { {} }
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(AppSpacing.medium),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Icon
-            Box(
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (showAsConnected) Success.copy(alpha = 0.1f)
-                        else Primary.copy(alpha = 0.1f)
-                    ),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .padding(AppSpacing.medium),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Bluetooth,
-                    contentDescription = null,
-                    tint = if (showAsConnected) Success else Primary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(AppSpacing.medium))
-
-            // Text
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.rayban_glasses),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimaryLight
-                )
-                Text(
-                    text = when {
-                        showAsConnected -> stringResource(R.string.connected)
-                        isSearching -> stringResource(R.string.searching)
-                        isConnecting -> stringResource(R.string.connecting)
-                        connectionState is WearablesViewModel.ConnectionState.Error -> connectionState.message
-                        else -> stringResource(R.string.disconnected)
-                    },
-                    fontSize = 14.sp,
-                    color = if (showAsConnected) Success else TextSecondaryLight
-                )
-            }
-
-            // Connect Button or Status
-            when {
-                showAsConnected -> {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(AppRadius.small))
-                            .background(Success.copy(alpha = 0.1f))
-                            .padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.connected),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Success
-                        )
-                    }
-                }
-                isSearching || isConnecting -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                        color = Primary
+                // Icon
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (showAsConnected) Success.copy(alpha = 0.1f)
+                            else Primary.copy(alpha = 0.1f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Bluetooth,
+                        contentDescription = null,
+                        tint = if (showAsConnected) Success else Primary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
-                else -> {
-                    Button(
-                        onClick = onConnect,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Primary
-                        ),
-                        shape = RoundedCornerShape(AppRadius.small)
-                    ) {
-                        Text(stringResource(R.string.connect_glasses))
+
+                Spacer(modifier = Modifier.width(AppSpacing.medium))
+
+                // Text
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when (connectionState) {
+                            is WearablesViewModel.ConnectionState.Connected -> connectionState.deviceName
+                            is WearablesViewModel.ConnectionState.Registered -> connectionState.deviceName
+                            else -> stringResource(R.string.rayban_glasses)
+                        },
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimaryLight
+                    )
+                    Text(
+                        text = when {
+                            showAsConnected -> stringResource(R.string.connected)
+                            isSearching -> stringResource(R.string.searching)
+                            isConnecting -> stringResource(R.string.connecting)
+                            connectionState is WearablesViewModel.ConnectionState.Error -> connectionState.message
+                            else -> stringResource(R.string.disconnected)
+                        },
+                        fontSize = 14.sp,
+                        color = if (showAsConnected) Success else TextSecondaryLight
+                    )
+                }
+
+                // Connect Button or Status
+                when {
+                    showAsConnected -> {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(AppRadius.small))
+                                .background(Success.copy(alpha = 0.1f))
+                                .padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.connected),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Success
+                            )
+                        }
+                    }
+                    isSearching || isConnecting -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = Primary
+                        )
+                    }
+                    else -> {
+                        Button(
+                            onClick = onConnect,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Primary
+                            ),
+                            shape = RoundedCornerShape(AppRadius.small)
+                        ) {
+                            Text(stringResource(R.string.connect_glasses))
+                        }
                     }
                 }
             }
+
+            // Update prompts (spec §5.7): firmware (Device.compatibility) and DAT glasses app (session error)
+            if (isFirmwareUpdateRequired) {
+                UpdateRequiredRow(
+                    message = stringResource(R.string.update_required_firmware),
+                    buttonText = stringResource(R.string.update_firmware),
+                    onClick = onUpdateFirmware
+                )
+            }
+            if (isDatAppUpdateRequired) {
+                UpdateRequiredRow(
+                    message = stringResource(R.string.update_required_dat_app),
+                    buttonText = stringResource(R.string.update_dat_app),
+                    onClick = onUpdateDatApp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateRequiredRow(
+    message: String,
+    buttonText: String,
+    onClick: () -> Unit
+) {
+    HorizontalDivider(modifier = Modifier.padding(horizontal = AppSpacing.medium))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = null,
+            tint = Warning,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(AppSpacing.small))
+        Text(
+            text = message,
+            fontSize = 13.sp,
+            color = TextSecondaryLight,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(AppSpacing.small))
+        TextButton(onClick = onClick) {
+            Text(buttonText, color = Primary, fontWeight = FontWeight.Medium)
         }
     }
 }

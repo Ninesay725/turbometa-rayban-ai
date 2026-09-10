@@ -180,9 +180,9 @@ fun QuickVisionScreen(
             Log.d(TAG, "📹 Starting stream...")
             wearablesViewModel.startStream()
 
-            // Wait for stream to be ready (max 5 seconds)
+            // Wait for stream to be ready (max 12 seconds: session create + STARTED + addCamera + STREAMING)
             var streamWait = 0
-            while (streamState !is WearablesViewModel.StreamState.Streaming && streamWait < 50) {
+            while (streamState !is WearablesViewModel.StreamState.Streaming && streamWait < 120) {
                 delay(100)
                 streamWait++
             }
