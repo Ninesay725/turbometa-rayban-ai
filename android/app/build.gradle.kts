@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,12 +8,12 @@ plugins {
 
 android {
     namespace = "com.smartview.glassai"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.smartview.glassai"
         minSdk = 31
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 4
         versionName = "1.5.0"
 
@@ -44,12 +46,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-
-    kotlinOptions {
-        jvmTarget = "1.8"
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildFeatures {
@@ -68,14 +66,24 @@ android {
         abortOnError = false
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     // Split APKs by ABI for smaller file sizes
     splits {
         abi {
             isEnable = true
             reset()
             include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = true  // Also generate a universal APK
+            isUniversalApk = true  // Also generate a universal APK (used for emulator installs)
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 
@@ -130,4 +138,13 @@ dependencies {
 
     // RTMP Streaming (RootEncoder old version without Compose dependencies)
     implementation(libs.rtmp.client)
+
+    // Unit tests (JVM)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+
+    // Instrumented tests (emulator + MockDeviceKit, Task 9)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
 }
