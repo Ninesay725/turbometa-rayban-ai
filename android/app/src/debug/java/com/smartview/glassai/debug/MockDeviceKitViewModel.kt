@@ -74,8 +74,8 @@ class MockDeviceKitViewModel(private val application: Application) : AndroidView
                 Log.d(TAG, "Paired mock Ray-Ban Meta ${info.deviceId}")
             },
             onFailure = { error, _ ->
-                Log.e(TAG, "pairGlasses failed: $error")
-                _uiState.update { it.copy(lastError = error.toString()) }
+                Log.e(TAG, "pairGlasses failed: ${error.description}")
+                _uiState.update { it.copy(lastError = error.description) }
             },
         )
     }
