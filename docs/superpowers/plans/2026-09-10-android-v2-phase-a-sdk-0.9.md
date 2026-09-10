@@ -51,7 +51,7 @@
 | `app/src/androidTest/assets/plant.png` | Create (Task 9, copied from `$SAMPLE`) | Image returned by the mock `capturePhoto()` |
 | `app/src/main/java/com/smartview/glassai/viewmodels/WearablesViewModel.kt` | Rewrite (Task 4), modify (Task 6) | UI-facing DAT façade: registration (Activity), device metadata, stream via manager, photo capture |
 | `app/src/main/java/com/smartview/glassai/ui/screens/HomeScreen.kt` | Modify (Task 4) | `LocalActivity` for register/disconnect; firmware / DAT-app update buttons |
-| `app/src/main/java/com/smartview/glassai/ui/screens/QuickVisionScreen.kt` | Modify (Task 4) | Stream wait budget 5 s → 12 s (matches the session start chain) |
+| `app/src/main/java/com/smartview/glassai/ui/screens/QuickVisionScreen.kt` | Modify (Task 4) | Stream wait budget 5 s → 20 s with early exit on `StreamState.Error` (covers stop-wait 5 s + session start 12 s + retry 1 s) |
 | `app/src/main/java/com/smartview/glassai/services/QuickVisionService.kt` | Modify (Task 5) | Wake-word capture via `GlassesPhotoCapturer` (shared session, `capturePhoto()`, 12 s budgets, `CameraBusy`) |
 | `app/src/main/java/com/smartview/glassai/viewmodels/RTMPStreamingViewModel.kt` | Modify (Tasks 5, 6) | RTMP feed via shared session |
 | `app/src/main/java/com/smartview/glassai/ui/screens/RTMPStreamingScreen.kt` | Modify (Task 5) | Import rename |
@@ -2871,9 +2871,9 @@ private fun UpdateRequiredRow(
 with:
 
 ```kotlin
-            // Wait for stream to be ready (max 12 seconds: session create + STARTED + addCamera + STREAMING)
+            // Wait for stream to be ready (max 20 seconds: previous-session stop-wait + session create + STARTED + addCamera + STREAMING); exit early on Error
             var streamWait = 0
-            while (streamState !is WearablesViewModel.StreamState.Streaming && streamWait < 120) {
+            while (streamState !is WearablesViewModel.StreamState.Streaming && streamState !is WearablesViewModel.StreamState.Error && streamWait < 200) {
 ```
 
 (The loop body `delay(100); streamWait++` on lines 186-187 is unchanged.)
@@ -4412,6 +4412,41 @@ git commit -m "feat(android): decode frames off the main thread with frame dropp
 
 ---
 
+
+### Task 6 addendum (controller ruling after the Task 4 review): surface `WearablesViewModel.errorMessage`
+
+**Why:** the Task 4 review found that no screen collects `wearablesViewModel.errorMessage` or reacts to `WearablesViewModel.StreamState.Error`, so the localized session/stream/registration/navigation errors added in Task 4 are unreachable. Task 6 already modifies `LiveAIScreen.kt` and `SimpleLiveStreamScreen.kt` for the Paused state, so the error surface lands here.
+
+**Files:**
+- Modify: `app/src/main/java/com/smartview/glassai/ui/screens/LiveAIScreen.kt`, `QuickVisionScreen.kt`, `SimpleLiveStreamScreen.kt`, `HomeScreen.kt` (one block each, placed with the screen's other top-level `LaunchedEffect`s)
+
+**Interfaces:**
+- Consumes: `WearablesViewModel.errorMessage: StateFlow<String?>`, `WearablesViewModel.clearError()` (Task 4).
+- Produces: nothing new.
+
+- [ ] **Step 6.A1: Add the error toast block to each of the four screens**
+
+Insert this block in each screen's composable body, after the existing `collectAsState()` declarations (imports needed: `android.widget.Toast`, `androidx.compose.runtime.LaunchedEffect`, `androidx.compose.runtime.getValue`, `androidx.compose.runtime.collectAsState`, `androidx.compose.ui.platform.LocalContext` — add only the ones the file does not already import):
+
+```kotlin
+    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
+    val errorToastContext = LocalContext.current
+    LaunchedEffect(wearablesErrorMessage) {
+        val message = wearablesErrorMessage ?: return@LaunchedEffect
+        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
+        wearablesViewModel.clearError()
+    }
+```
+
+In `HomeScreen.kt` the ViewModel parameter is named `wearablesViewModel` (see `HomeScreen(...)` signature); in the three streaming screens use whatever name the composable already binds the shared `WearablesViewModel` to (grep `wearablesViewModel` in each file; `QuickVisionScreen.kt` and `SimpleLiveStreamScreen.kt` receive it as a parameter, `LiveAIScreen.kt` likewise).
+
+- [ ] **Step 6.A2: Verify**
+
+Run (Git Bash, from `android/`): `./gradlew :app:assembleDebug`
+Expected: `BUILD SUCCESSFUL`, no new warnings. Then on the emulator with MockDeviceKit disabled, open Home → Quick Vision with no device: the toast shows the localized `glasses_session_failed` / `glasses_no_session` text and clears (no repeat on recomposition).
+
+- [ ] **Step 6.A3: Commit** — include these four files in Task 6's final commit (Step 6.10) rather than a separate commit.
+
 ### Task 7: Permission gating — Bluetooth-only SDK gate, lazy `RECORD_AUDIO`, `POST_NOTIFICATIONS`
 
 **Files:**
@@ -5809,7 +5844,7 @@ adb logcat -s GlassesSessionManager:D WearablesViewModel:D QuickVisionService:D 
 7. Home → **Live Stream** wide card: the camera-permission check passes (MockDeviceKit grants by default); the preview shows the emulator's virtual-scene camera within ~5 s. Logcat: `acquire(WearablesViewModel)`, `session state: STARTING`, `session state: STARTED`, `addCamera(WearablesViewModel) ok`, `Stream state: STREAMING`.
 8. MockDeviceKit (open it from Settings in a second pass, or use a second paired-device card) → **Tap (pause/resume)**: the Live Stream screen shows the **Paused / Tap your glasses to resume** overlay; tap again → preview resumes. Logcat: `Stream state: PAUSED` then `STREAMING`.
 9. Leave the Live Stream screen: logcat shows `stopCamera(WearablesViewModel)`, `release(WearablesViewModel) owners=[]`, `stopSession`. Re-enter: a new session is created (`createSession` → `STARTED` again) — proves STOPPED is terminal and the ref count recreates.
-10. Home → **Quick Vision** (requires a Vision API key; if none is configured the flow stops at the API-key dialog — configure any non-empty key in Settings to pass the gate, the analysis call itself may then fail, which is fine). The screen starts the stream (now waiting up to 12 s, Step 4.3a), calls `takePhoto()`; `capturedPhoto` becomes the mock PNG (rotated 90°). Logcat: `Photo captured: WxH`. If no captured image was set the mock's `capturePhoto()` behaviour is undocumented: either `Photo capture failed:` is logged and the screen falls back to `currentFrame`, or a placeholder image is returned — both are acceptable here; the deterministic fallback path is covered by Task 9's `capturerFallsBackToVideoFrameWhenPhotoIsUndecodable`.
+10. Home → **Quick Vision** (requires a Vision API key; if none is configured the flow stops at the API-key dialog — configure any non-empty key in Settings to pass the gate, the analysis call itself may then fail, which is fine). The screen starts the stream (now waiting up to 20 s with early exit on Error, Step 4.3a), calls `takePhoto()`; `capturedPhoto` becomes the mock PNG (rotated 90°). Logcat: `Photo captured: WxH`. If no captured image was set the mock's `capturePhoto()` behaviour is undocumented: either `Photo capture failed:` is logged and the screen falls back to `currentFrame`, or a placeholder image is returned — both are acceptable here; the deterministic fallback path is covered by Task 9's `capturerFallsBackToVideoFrameWhenPhotoIsUndecodable`.
 11. Switch app language to 中文 in Settings and re-check strings on the Home card and MockDeviceKit screen (Chinese text appears for every new string).
 12. Fold test: on MockDeviceKit switch **Unfolded** off while Live Stream is open → the stream ends and the screen goes back to the loading state; logcat shows `session state: STOPPED`; leaving and re-entering the screen recreates the session.
 13. `CameraBusy` test (wake-word path is not available on the emulator): open Live Stream, then from a second Git Bash run
