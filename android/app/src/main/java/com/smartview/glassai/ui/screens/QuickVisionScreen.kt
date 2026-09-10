@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -67,6 +68,14 @@ fun QuickVisionScreen(
     val currentFrame by wearablesViewModel.currentFrame.collectAsState()
     val capturedPhoto by wearablesViewModel.capturedPhoto.collectAsState()
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
+
+    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
+    val errorToastContext = LocalContext.current
+    LaunchedEffect(wearablesErrorMessage) {
+        val message = wearablesErrorMessage ?: return@LaunchedEffect
+        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
+        wearablesViewModel.clearError()
+    }
 
     // Quick Vision state
     var isProcessing by remember { mutableStateOf(false) }

@@ -1,6 +1,7 @@
 package com.smartview.glassai.ui.screens
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -21,10 +22,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.smartview.glassai.R
 import com.smartview.glassai.ui.theme.AppRadius
 import com.smartview.glassai.ui.theme.AppSpacing
 import com.smartview.glassai.viewmodels.WearablesViewModel
@@ -37,6 +41,14 @@ fun SimpleLiveStreamScreen(
     val currentFrame by wearablesViewModel.currentFrame.collectAsState()
     val streamState by wearablesViewModel.streamState.collectAsState()
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
+
+    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
+    val errorToastContext = LocalContext.current
+    LaunchedEffect(wearablesErrorMessage) {
+        val message = wearablesErrorMessage ?: return@LaunchedEffect
+        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
+        wearablesViewModel.clearError()
+    }
 
     // UI visibility toggle
     var showUI by remember { mutableStateOf(true) }
@@ -55,6 +67,7 @@ fun SimpleLiveStreamScreen(
     }
 
     val isStreaming = streamState is WearablesViewModel.StreamState.Streaming
+    val isPaused = streamState is WearablesViewModel.StreamState.Paused
 
     Box(
         modifier = Modifier
@@ -89,6 +102,30 @@ fun SimpleLiveStreamScreen(
                 Text(
                     text = "Connecting to stream...",
                     fontSize = 16.sp,
+                    color = Color.White
+                )
+            }
+        }
+
+        // Paused by the glasses (cap-touch tap): keep the last frame, show the hint
+        if (isPaused) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f)),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.stream_paused_title),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(AppSpacing.small))
+                Text(
+                    text = stringResource(R.string.stream_paused_subtitle),
+                    fontSize = 14.sp,
                     color = Color.White
                 )
             }

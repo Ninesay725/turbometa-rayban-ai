@@ -394,4 +394,42 @@
     <string name="glasses_camera_busy">The glasses camera is being used by another feature</string>
     <string name="glasses_no_session">No active glasses session</string>
     <string name="photo_capture_failed">Photo capture failed</string>
+
+    <!-- Phase A: stream pause + DAT error mapping (spec §5.8, §5.9) -->
+    <string name="stream_paused_title">Paused</string>
+    <string name="stream_paused_subtitle">Tap your glasses to resume</string>
+    <string name="dat_error_unknown">Unknown glasses error</string>
+    <string name="dat_session_capability_denied">Permission for this feature was denied in the Meta AI app</string>
+    <string name="dat_session_no_eligible_device">No compatible glasses are connected</string>
+    <string name="dat_session_already_stopped">The glasses session has already ended</string>
+    <string name="dat_session_idle">The glasses session has not started yet</string>
+    <string name="dat_session_capability_already_added">The glasses camera is already in use</string>
+    <string name="dat_session_capability_not_found">The requested glasses feature is not available</string>
+    <string name="dat_session_device_disconnected">The glasses disconnected</string>
+    <string name="dat_session_ended_by_device">The glasses ended the session</string>
+    <string name="dat_session_already_exists">Another session is already running on the glasses</string>
+    <string name="dat_session_thermal_critical">The glasses are too hot; the session was stopped</string>
+    <string name="dat_session_thermal_emergency">The glasses overheated and shut down the session</string>
+    <string name="dat_session_peak_power_shutdown">The glasses shut down the session to save power</string>
+    <string name="dat_session_battery_critical">Glasses battery is critically low</string>
+    <string name="dat_session_dat_app_update_required">The Device Access Toolkit app on your glasses needs an update</string>
+    <string name="dat_session_dwa_unavailable">The glasses app service is unavailable. Check the Meta AI app.</string>
+    <string name="dat_session_unexpected_error">Unexpected glasses session error</string>
+    <string name="dat_stream_error">Video stream error</string>
+    <string name="dat_stream_critical_error">Critical video stream error; the stream was stopped</string>
+    <string name="dat_stream_hinge_closed">The glasses were folded; the stream stopped</string>
+    <string name="dat_stream_permissions_denied">Camera permission was denied in the Meta AI app</string>
+    <string name="dat_stream_thermal_hot">The glasses are getting hot; video quality may drop</string>
+    <string name="dat_stream_battery_low">Glasses battery is low</string>
+    <string name="dat_stream_peak_power_limit">The glasses reduced the stream to save power</string>
+    <string name="dat_stream_timeout">The video stream timed out</string>
+    <string name="dat_capture_device_disconnected">Cannot take a photo: the glasses disconnected</string>
+    <string name="dat_capture_not_streaming">Cannot take a photo: the stream is not running</string>
+    <string name="dat_capture_in_progress">A photo is already being captured</string>
+    <string name="dat_registration_already_registered">Already connected to the Meta AI app</string>
+    <string name="dat_registration_already_unregistered">Not connected to the Meta AI app</string>
+    <string name="dat_registration_failed_to_register">Could not connect to the Meta AI app</string>
+    <string name="dat_registration_failed_to_unregister">Could not disconnect from the Meta AI app</string>
+    <string name="dat_registration_meta_ai_not_installed">The Meta AI app is not installed</string>
+    <string name="dat_registration_unknown">Registration failed</string>
 </resources>

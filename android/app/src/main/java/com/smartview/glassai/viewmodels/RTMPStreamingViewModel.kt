@@ -17,10 +17,12 @@ import com.smartview.glassai.R
 import com.smartview.glassai.glasses.CameraError
 import com.smartview.glassai.glasses.CameraResult
 import com.smartview.glassai.glasses.GlassesCamera
+import com.smartview.glassai.glasses.GlassesErrorMessages
 import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.SessionStartResult
 import com.smartview.glassai.services.RTMPStreamingService
 import com.smartview.glassai.utils.APIKeyManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * RTMPStreamingViewModel - Manages RTMP streaming from glasses camera
@@ -78,6 +81,14 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
 
     // Borrowed camera + jobs
     private var camera: GlassesCamera? = null
+
+    // Single-threaded worker for frame handling (never the main thread), like the 0.9.0 sample
+    private val frameDispatcher = Dispatchers.Default.limitedParallelism(1)
+
+    // RTMP drop policy (spec §5.8): a frame arriving while the previous one is still being copied,
+    // encoded and previewed is skipped. The encoder still sees every accepted frame in order.
+    private val isProcessingFrame = AtomicBoolean(false)
+
     private var startJob: Job? = null
     private var videoJob: Job? = null
     private var stateJob: Job? = null
@@ -235,21 +246,28 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         streamErrorJob = viewModelScope.launch {
             borrowed.streamErrors.collect { error ->
                 Log.e(TAG, "Stream error: ${error.description}")
-                _uiState.value = UIState.Error(error.getLocalizedDescription(getApplication()))
+                _uiState.value = UIState.Error(GlassesErrorMessages.of(getApplication(), error))
             }
         }
 
-        videoJob = viewModelScope.launch {
+        // No conflate(): the SDK buffer is only valid inside collect {}, and handleVideoFrame copies
+        // it first (Task 5). Frames are handled on the single-threaded worker.
+        videoJob = viewModelScope.launch(frameDispatcher) {
             frameTimestampBase = 0L
             borrowed.videoFrames.collect { videoFrame ->
                 if (videoFrame.isCompressed || videoFrame.isCodecConfig) return@collect
-                handleVideoFrame(videoFrame)
+                if (!isProcessingFrame.compareAndSet(false, true)) return@collect
+                try {
+                    handleVideoFrame(videoFrame)
+                } finally {
+                    isProcessingFrame.set(false)
+                }
             }
         }
 
         val startError = borrowed.startStream()
         if (startError != null) {
-            failCamera(startError.getLocalizedDescription(getApplication()))
+            failCamera(GlassesErrorMessages.of(getApplication(), startError))
         }
     }
 
@@ -263,15 +281,8 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         _uiState.value = UIState.Error(message)
     }
 
-    private fun cameraErrorMessage(error: CameraError): String {
-        val app = getApplication<Application>()
-        return when (error) {
-            is CameraError.CameraBusy -> app.getString(R.string.glasses_camera_busy)
-            CameraError.NoSession -> app.getString(R.string.glasses_no_session)
-            CameraError.SessionNotStarted -> app.getString(R.string.glasses_session_timeout)
-            is CameraError.Sdk -> error.error.getLocalizedDescription(app)
-        }
-    }
+    private fun cameraErrorMessage(error: CameraError): String =
+        GlassesErrorMessages.of(getApplication(), error)
 
     private fun connectRtmp() {
         viewModelScope.launch {

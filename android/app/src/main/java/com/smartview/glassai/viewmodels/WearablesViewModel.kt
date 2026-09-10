@@ -25,6 +25,7 @@ import com.smartview.glassai.glasses.CameraError
 import com.smartview.glassai.glasses.CameraResult
 import com.smartview.glassai.glasses.GlassesCamera
 import com.smartview.glassai.glasses.GlassesDeviceInfo
+import com.smartview.glassai.glasses.GlassesErrorMessages
 import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.PhotoCaptureResult
 import com.smartview.glassai.glasses.SessionStartResult
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * WearablesViewModel - UI-facing DAT SDK façade (DAT 0.9.0).
@@ -128,6 +130,12 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
     // Borrowed camera (null when not streaming)
     private var camera: GlassesCamera? = null
 
+    // Single-threaded worker for frame decoding (never the main thread), like the 0.9.0 sample
+    private val frameDispatcher = Dispatchers.Default.limitedParallelism(1)
+
+    // Drop frames while the previous one is still being converted (spec §5.8)
+    private val isProcessingFrame = AtomicBoolean(false)
+
     // Coroutine jobs for stream management
     private var startJob: Job? = null
     private var videoJob: Job? = null
@@ -151,7 +159,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             Wearables.registrationErrorStream.collect { error ->
                 Log.e(TAG, "Registration error: ${error.description}")
-                setError(error.getLocalizedDescription(getApplication()))
+                setError(GlassesErrorMessages.of(getApplication(), error))
                 if (_connectionState.value is ConnectionState.Searching ||
                     _connectionState.value is ConnectionState.Connecting
                 ) {
@@ -215,7 +223,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         // 5. Session errors (createSession failures + DeviceSession.errors)
         viewModelScope.launch {
             sessionManager.sessionError.collect { error ->
-                setError(error.getLocalizedDescription(getApplication()))
+                setError(GlassesErrorMessages.of(getApplication(), error))
             }
         }
     }
@@ -315,7 +323,10 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         camera = null
         sessionManager.stopCamera(OWNER)
 
-        // Reset state
+        // Reset state. clearError() runs before acquire() so a stale message from an earlier
+        // failed attempt cannot survive a later successful start; each failure path below sets
+        // its own message afterwards.
+        clearError()
         _currentFrame.value = null
         _streamState.value = StreamState.Waiting
 
@@ -371,11 +382,21 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         camera = borrowed
 
         // Subscribe BEFORE start(): streamState is a StateFlow that replays STOPPED.
-        videoJob = viewModelScope.launch {
+        // Frames are decoded on a single-threaded worker, never on the main thread. No conflate():
+        // VideoFrame.buffer is only guaranteed valid inside collect {}, so the collector reads it
+        // directly and handleVideoFrame copies the bytes as its first step. The AtomicBoolean is
+        // the drop policy from spec §5.8: a frame that arrives while the previous one is still being
+        // converted is skipped instead of queued.
+        videoJob = viewModelScope.launch(frameDispatcher) {
             Log.d(TAG, "Starting video frame collection")
             borrowed.videoFrames.collect { videoFrame ->
                 if (videoFrame.isCompressed || videoFrame.isCodecConfig) return@collect
-                handleVideoFrame(videoFrame)
+                if (!isProcessingFrame.compareAndSet(false, true)) return@collect
+                try {
+                    handleVideoFrame(videoFrame)
+                } finally {
+                    isProcessingFrame.set(false)
+                }
             }
         }
 
@@ -396,10 +417,15 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     DatStreamState.STARTING,
                     DatStreamState.STARTED,
-                    DatStreamState.STOPPING,
-                    DatStreamState.PAUSED -> {
+                    DatStreamState.STOPPING -> {
                         hasBeenActive = true
                         _streamState.value = StreamState.Waiting
+                    }
+                    DatStreamState.PAUSED -> {
+                        // Paused by a cap-touch tap on the glasses; resumes on the next tap.
+                        // Do NOT restart the stream or the session here (spec §5.8).
+                        hasBeenActive = true
+                        _streamState.value = StreamState.Paused
                     }
                     DatStreamState.STOPPED,
                     DatStreamState.CLOSED -> {
@@ -416,14 +442,14 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         streamErrorJob = viewModelScope.launch {
             borrowed.streamErrors.collect { error ->
                 Log.e(TAG, "Stream error: ${error.description}")
-                setError(error.getLocalizedDescription(getApplication()))
+                setError(GlassesErrorMessages.of(getApplication(), error))
             }
         }
 
         val startError = borrowed.startStream()
         if (startError != null) {
             Log.e(TAG, "stream.start failed: ${startError.description}")
-            val message = startError.getLocalizedDescription(getApplication())
+            val message = GlassesErrorMessages.of(getApplication(), startError)
             setError(message)
             stopStream()
             _streamState.value = StreamState.Error(message)
@@ -466,15 +492,8 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         streamErrorJob = null
     }
 
-    private fun cameraErrorMessage(error: CameraError): String {
-        val app = getApplication<Application>()
-        return when (error) {
-            is CameraError.CameraBusy -> app.getString(R.string.glasses_camera_busy)
-            CameraError.NoSession -> app.getString(R.string.glasses_no_session)
-            CameraError.SessionNotStarted -> app.getString(R.string.glasses_session_timeout)
-            is CameraError.Sdk -> error.error.getLocalizedDescription(app)
-        }
-    }
+    private fun cameraErrorMessage(error: CameraError): String =
+        GlassesErrorMessages.of(getApplication(), error)
 
     /**
      * Capture a photo from the stream (DatResult<PhotoData, CaptureError> in 0.9.0).
@@ -503,7 +522,7 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 is PhotoCaptureResult.Failure -> {
                     Log.e(TAG, "Photo capture failed: ${result.error.description}")
-                    _errorMessage.value = result.error.getLocalizedDescription(getApplication())
+                    _errorMessage.value = GlassesErrorMessages.of(getApplication(), result.error)
                 }
             }
         }

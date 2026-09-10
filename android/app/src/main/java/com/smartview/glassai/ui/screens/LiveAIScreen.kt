@@ -1,6 +1,7 @@
 package com.smartview.glassai.ui.screens
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -69,6 +71,14 @@ fun LiveAIScreen(
     val currentFrame by wearablesViewModel.currentFrame.collectAsState()
     val streamState by wearablesViewModel.streamState.collectAsState()
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
+
+    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
+    val errorToastContext = LocalContext.current
+    LaunchedEffect(wearablesErrorMessage) {
+        val message = wearablesErrorMessage ?: return@LaunchedEffect
+        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
+        wearablesViewModel.clearError()
+    }
 
     val listState = rememberLazyListState()
 
@@ -580,6 +590,7 @@ private fun getStatusText(
     val streamText = when (streamState) {
         is WearablesViewModel.StreamState.Streaming -> "📹"
         is WearablesViewModel.StreamState.Waiting -> "⏳"
+        is WearablesViewModel.StreamState.Paused -> "⏸ " + stringResource(R.string.stream_paused_subtitle)
         else -> ""
     }
     val aiText = when (state) {
