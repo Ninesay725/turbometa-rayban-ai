@@ -336,17 +336,17 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
                 SessionStartResult.STARTED -> Unit
                 SessionStartResult.CREATE_FAILED -> {
                     Log.e(TAG, "createSession failed")
-                    _streamState.value = StreamState.Error(
-                        getApplication<Application>().getString(R.string.glasses_session_failed)
-                    )
+                    val message = getApplication<Application>().getString(R.string.glasses_session_failed)
+                    setError(message)
+                    _streamState.value = StreamState.Error(message)
                     sessionManager.release(OWNER)
                     return@launch
                 }
                 SessionStartResult.NOT_STARTED -> {
                     Log.e(TAG, "session did not reach STARTED")
-                    _streamState.value = StreamState.Error(
-                        getApplication<Application>().getString(R.string.glasses_session_timeout)
-                    )
+                    val message = getApplication<Application>().getString(R.string.glasses_session_timeout)
+                    setError(message)
+                    _streamState.value = StreamState.Error(message)
                     sessionManager.release(OWNER)
                     return@launch
                 }
@@ -356,7 +356,9 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
                 is CameraResult.Ready -> attachCamera(result.camera)
                 is CameraResult.Failed -> {
                     Log.e(TAG, "addCamera failed: ${result.error}")
-                    _streamState.value = StreamState.Error(cameraErrorMessage(result.error))
+                    val message = cameraErrorMessage(result.error)
+                    setError(message)
+                    _streamState.value = StreamState.Error(message)
                     sessionManager.release(OWNER)
                 }
             }
@@ -421,8 +423,10 @@ class WearablesViewModel(application: Application) : AndroidViewModel(applicatio
         val startError = borrowed.startStream()
         if (startError != null) {
             Log.e(TAG, "stream.start failed: ${startError.description}")
-            _streamState.value = StreamState.Error(startError.getLocalizedDescription(getApplication()))
+            val message = startError.getLocalizedDescription(getApplication())
+            setError(message)
             stopStream()
+            _streamState.value = StreamState.Error(message)
         }
     }
 

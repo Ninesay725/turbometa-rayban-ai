@@ -180,16 +180,16 @@ fun QuickVisionScreen(
             Log.d(TAG, "📹 Starting stream...")
             wearablesViewModel.startStream()
 
-            // Wait for stream to be ready (max 12 seconds: session create + STARTED + addCamera + STREAMING)
+            // Wait for stream to be ready (max 20 seconds: previous-session stop-wait + session create + STARTED + addCamera + STREAMING); exit early on Error
             var streamWait = 0
-            while (streamState !is WearablesViewModel.StreamState.Streaming && streamWait < 120) {
+            while (streamState !is WearablesViewModel.StreamState.Streaming && streamState !is WearablesViewModel.StreamState.Error && streamWait < 200) {
                 delay(100)
                 streamWait++
             }
 
             if (streamState !is WearablesViewModel.StreamState.Streaming) {
                 Log.e(TAG, "❌ Failed to start stream")
-                errorMessage = streamFailedText
+                errorMessage = wearablesViewModel.errorMessage.value ?: streamFailedText
                 speak(streamFailedText)
                 isProcessing = false
                 return
