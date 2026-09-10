@@ -18,6 +18,7 @@ import androidx.navigation.compose.rememberNavController
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.smartview.glassai.R
+import com.smartview.glassai.debug.MockDeviceKitEntry
 import com.smartview.glassai.ui.screens.*
 import com.smartview.glassai.ui.theme.Primary
 import com.smartview.glassai.viewmodels.WearablesViewModel
@@ -35,6 +36,7 @@ sealed class Screen(val route: String) {
     object RTMPStream : Screen("rtmp_stream")
     object QuickVisionMode : Screen("quick_vision_mode")
     object LiveAIMode : Screen("live_ai_mode")
+    object MockDeviceKit : Screen("mock_device_kit")
 }
 
 sealed class BottomNavItem(
@@ -191,6 +193,9 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToLiveAIMode = {
                         navController.navigate(Screen.LiveAIMode.route)
+                    },
+                    onNavigateToMockDeviceKit = {
+                        navController.navigate(Screen.MockDeviceKit.route)
                     }
                 )
             }
@@ -238,6 +243,14 @@ fun TurboMetaNavigation(
 
             composable(Screen.LiveAIMode.route) {
                 LiveAIModeScreen(
+                    onBackClick = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Screen.MockDeviceKit.route) {
+                MockDeviceKitEntry.Screen(
                     onBackClick = {
                         navController.popBackStack()
                     }

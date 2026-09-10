@@ -432,4 +432,32 @@
     <string name="dat_registration_failed_to_unregister">无法与 Meta AI 应用断开连接</string>
     <string name="dat_registration_meta_ai_not_installed">未安装 Meta AI 应用</string>
     <string name="dat_registration_unknown">注册失败</string>
+
+    <!-- Phase A: MockDeviceKit debug screen (debug builds only) -->
+    <string name="settings_developer">开发者</string>
+    <string name="mock_device_kit_title">MockDeviceKit</string>
+    <string name="mock_device_kit_subtitle">无需真机模拟眼镜（仅调试版）</string>
+    <string name="mock_device_kit_description">此页面模拟 Ray-Ban Meta 眼镜及其相机和状态。</string>
+    <string name="mock_enable">启用 MockDeviceKit</string>
+    <string name="mock_disable">禁用 MockDeviceKit</string>
+    <string name="mock_pair_rayban">配对 Ray-Ban Meta</string>
+    <string name="mock_paired_count">已配对 %1$d 台</string>
+    <string name="mock_device_name">模拟眼镜</string>
+    <string name="mock_unpair">取消配对</string>
+    <string name="mock_power">电源</string>
+    <string name="mock_donned">佩戴</string>
+    <string name="mock_unfolded">展开</string>
+    <string name="mock_captouch_title">触控板手势（仅会话激活时）</string>
+    <string name="mock_captouch_tap">轻触（暂停/恢复）</string>
+    <string name="mock_captouch_tap_and_hold">长按（停止）</string>
+    <string name="mock_camera_source">相机源：%1$s</string>
+    <string name="mock_camera_source_none">无</string>
+    <string name="mock_camera_source_video">视频文件</string>
+    <string name="mock_front_camera">前置摄像头</string>
+    <string name="mock_back_camera">后置摄像头</string>
+    <string name="mock_select_image">选择拍照图片</string>
+    <string name="mock_has_captured_image">已设置拍照图片</string>
+    <string name="mock_video_hint">视频文件必须为 H.265 (HEVC) 编码。</string>
+    <string name="mock_camera_permission_denied">使用手机摄像头作为模拟视频源需要相机权限。</string>
+    <string name="mock_open_settings">打开设置</string>
 </resources>

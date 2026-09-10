@@ -37,7 +37,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.smartview.glassai.BuildConfig
 import com.smartview.glassai.R
+import com.smartview.glassai.debug.MockDeviceKitEntry
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.smartview.glassai.managers.AlibabaEndpoint
@@ -61,7 +63,8 @@ fun SettingsScreen(
     onBackClick: () -> Unit,
     onNavigateToRecords: () -> Unit,
     onNavigateToQuickVisionMode: () -> Unit = {},
-    onNavigateToLiveAIMode: () -> Unit = {}
+    onNavigateToLiveAIMode: () -> Unit = {},
+    onNavigateToMockDeviceKit: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -413,6 +416,18 @@ fun SettingsScreen(
                     onClick = { viewModel.showDeleteConfirmDialog() },
                     isDestructive = true
                 )
+            }
+
+            // Developer Section (debug builds only)
+            if (BuildConfig.DEBUG && MockDeviceKitEntry.isAvailable) {
+                SettingsSection(title = stringResource(R.string.settings_developer)) {
+                    SettingsItem(
+                        icon = Icons.Default.BugReport,
+                        title = stringResource(R.string.mock_device_kit_title),
+                        subtitle = stringResource(R.string.mock_device_kit_subtitle),
+                        onClick = onNavigateToMockDeviceKit
+                    )
+                }
             }
 
             // About Section

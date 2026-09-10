@@ -432,4 +432,32 @@
     <string name="dat_registration_failed_to_unregister">Could not disconnect from the Meta AI app</string>
     <string name="dat_registration_meta_ai_not_installed">The Meta AI app is not installed</string>
     <string name="dat_registration_unknown">Registration failed</string>
+
+    <!-- Phase A: MockDeviceKit debug screen (debug builds only) -->
+    <string name="settings_developer">Developer</string>
+    <string name="mock_device_kit_title">MockDeviceKit</string>
+    <string name="mock_device_kit_subtitle">Simulate glasses without hardware (debug only)</string>
+    <string name="mock_device_kit_description">This screen simulates Ray-Ban Meta glasses and mocks their camera and states.</string>
+    <string name="mock_enable">Enable MockDeviceKit</string>
+    <string name="mock_disable">Disable MockDeviceKit</string>
+    <string name="mock_pair_rayban">Pair Ray-Ban Meta</string>
+    <string name="mock_paired_count">%1$d paired</string>
+    <string name="mock_device_name">Mock glasses</string>
+    <string name="mock_unpair">Unpair</string>
+    <string name="mock_power">Power</string>
+    <string name="mock_donned">Worn</string>
+    <string name="mock_unfolded">Unfolded</string>
+    <string name="mock_captouch_title">Touchpad gestures (active session only)</string>
+    <string name="mock_captouch_tap">Tap (pause/resume)</string>
+    <string name="mock_captouch_tap_and_hold">Tap and hold (stop)</string>
+    <string name="mock_camera_source">Camera source: %1$s</string>
+    <string name="mock_camera_source_none">None</string>
+    <string name="mock_camera_source_video">Video file</string>
+    <string name="mock_front_camera">Front camera</string>
+    <string name="mock_back_camera">Back camera</string>
+    <string name="mock_select_image">Select captured image</string>
+    <string name="mock_has_captured_image">Captured image set</string>
+    <string name="mock_video_hint">Video files must be H.265 (HEVC).</string>
+    <string name="mock_camera_permission_denied">Camera permission is required to use the phone camera as the mock feed.</string>
+    <string name="mock_open_settings">Open settings</string>
 </resources>
