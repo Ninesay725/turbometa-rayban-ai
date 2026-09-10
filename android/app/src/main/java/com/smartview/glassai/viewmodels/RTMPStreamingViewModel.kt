@@ -95,9 +95,13 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private var streamErrorJob: Job? = null
     private var statsJob: Job? = null
 
-    // Video parameters (set when stream starts)
+    // Video parameters (set when stream starts).
+    // @Volatile: written by the frame worker on frameDispatcher, read and reset on Main.
+    @Volatile
     private var videoWidth = 0
+    @Volatile
     private var videoHeight = 0
+    @Volatile
     private var frameTimestampBase = 0L
 
     init {

@@ -71,8 +71,15 @@ fun QuickVisionScreen(
 
     val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
     val errorToastContext = LocalContext.current
+    // clearError() below runs within ~one Compose frame of the message appearing, long before the
+    // 100 ms polling loop in performQuickVision() wakes up, so that loop can never read the
+    // ViewModel's errorMessage itself. Snapshot it here first and let the failure branch fall back
+    // to the snapshot, so the inline card keeps the specific localized reason instead of the
+    // generic stream_failed text.
+    var lastGlassesError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(wearablesErrorMessage) {
         val message = wearablesErrorMessage ?: return@LaunchedEffect
+        lastGlassesError = message
         Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
         wearablesViewModel.clearError()
     }
@@ -166,6 +173,7 @@ fun QuickVisionScreen(
 
         isProcessing = true
         errorMessage = null
+        lastGlassesError = null
         analysisResult = null
         photoForAnalysis = null
 
@@ -198,7 +206,7 @@ fun QuickVisionScreen(
 
             if (streamState !is WearablesViewModel.StreamState.Streaming) {
                 Log.e(TAG, "❌ Failed to start stream")
-                errorMessage = wearablesViewModel.errorMessage.value ?: streamFailedText
+                errorMessage = lastGlassesError ?: streamFailedText
                 speak(streamFailedText)
                 isProcessing = false
                 return

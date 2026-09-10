@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * RTMPStreamingService - Streams video from Ray-Ban Meta glasses to RTMP server
@@ -62,7 +64,15 @@ class RTMPStreamingService(private val context: Context) {
     // RTMP client
     private var rtmpClient: RtmpClient? = null
 
-    // H.264 encoder
+    // H.264 encoder.
+    // encoderLock serialises every MediaCodec call (feedFrame from the frame worker, the
+    // encoderJob output loop) against the stop()/release() teardown in stopStreaming(), which runs
+    // on whichever thread stops the stream. Without it release() can land inside a codec call.
+    // encoder/isStreaming are @Volatile so the worker sees the teardown's writes immediately.
+    // Fair, because the output loop below re-takes the lock immediately after releasing it: an
+    // unfair monitor would let it barge ahead of a waiting feedFrame() or stopStreaming().
+    private val encoderLock = ReentrantLock(true)
+    @Volatile
     private var encoder: MediaCodec? = null
     private var encoderInputBuffers: Array<ByteBuffer>? = null
     private var encoderJob: Job? = null
@@ -70,6 +80,7 @@ class RTMPStreamingService(private val context: Context) {
     // Video parameters
     private var videoWidth = 0
     private var videoHeight = 0
+    @Volatile
     private var isStreaming = false
 
     // SPS/PPS for H.264 stream initialization
@@ -217,30 +228,32 @@ class RTMPStreamingService(private val context: Context) {
             val bufferInfo = MediaCodec.BufferInfo()
 
             while (isStreaming) {
-                try {
-                    val outputIndex = encoder?.dequeueOutputBuffer(bufferInfo, 10000) ?: -1
+                encoderLock.withLock {
+                    try {
+                        val outputIndex = encoder?.dequeueOutputBuffer(bufferInfo, 10000) ?: -1
 
-                    when {
-                        outputIndex >= 0 -> {
-                            val outputBuffer = encoder?.getOutputBuffer(outputIndex)
-                            if (outputBuffer != null && bufferInfo.size > 0) {
-                                // Check for codec config (SPS/PPS)
-                                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                                    extractSpsPps(outputBuffer, bufferInfo.size)
-                                } else {
-                                    // Send H.264 data to RTMP
-                                    sendH264Data(outputBuffer, bufferInfo)
+                        when {
+                            outputIndex >= 0 -> {
+                                val outputBuffer = encoder?.getOutputBuffer(outputIndex)
+                                if (outputBuffer != null && bufferInfo.size > 0) {
+                                    // Check for codec config (SPS/PPS)
+                                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                        extractSpsPps(outputBuffer, bufferInfo.size)
+                                    } else {
+                                        // Send H.264 data to RTMP
+                                        sendH264Data(outputBuffer, bufferInfo)
+                                    }
                                 }
+                                encoder?.releaseOutputBuffer(outputIndex, false)
                             }
-                            encoder?.releaseOutputBuffer(outputIndex, false)
+                            outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                                Log.d(TAG, "Encoder output format changed: ${encoder?.outputFormat}")
+                            }
                         }
-                        outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                            Log.d(TAG, "Encoder output format changed: ${encoder?.outputFormat}")
+                    } catch (e: Exception) {
+                        if (isStreaming) {
+                            Log.e(TAG, "Encoder output error: ${e.message}")
                         }
-                    }
-                } catch (e: Exception) {
-                    if (isStreaming) {
-                        Log.e(TAG, "Encoder output error: ${e.message}")
                     }
                 }
             }
@@ -314,18 +327,20 @@ class RTMPStreamingService(private val context: Context) {
      * @param timestampUs Presentation timestamp in microseconds
      */
     fun feedFrame(i420Data: ByteArray, width: Int, height: Int, timestampUs: Long) {
-        if (!isStreaming || encoder == null) return
+        encoderLock.withLock {
+            if (!isStreaming || encoder == null) return
 
-        try {
-            val inputIndex = encoder?.dequeueInputBuffer(0) ?: -1
-            if (inputIndex >= 0) {
-                val inputBuffer = encoder?.getInputBuffer(inputIndex)
-                inputBuffer?.clear()
-                inputBuffer?.put(i420Data)
-                encoder?.queueInputBuffer(inputIndex, 0, i420Data.size, timestampUs, 0)
+            try {
+                val inputIndex = encoder?.dequeueInputBuffer(0) ?: -1
+                if (inputIndex >= 0) {
+                    val inputBuffer = encoder?.getInputBuffer(inputIndex)
+                    inputBuffer?.clear()
+                    inputBuffer?.put(i420Data)
+                    encoder?.queueInputBuffer(inputIndex, 0, i420Data.size, timestampUs, 0)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error feeding frame: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error feeding frame: ${e.message}")
         }
     }
 
@@ -344,57 +359,59 @@ class RTMPStreamingService(private val context: Context) {
      * Directly passes I420 data to encoder configured with COLOR_FormatYUV420Planar
      */
     fun feedFrame(buffer: ByteBuffer, width: Int, height: Int, timestampUs: Long) {
-        if (!isStreaming || encoder == null) return
+        encoderLock.withLock {
+            if (!isStreaming || encoder == null) return
 
-        totalFrames++
+            totalFrames++
 
-        try {
-            // Use longer timeout to reduce frame drops
-            val inputIndex = encoder?.dequeueInputBuffer(10000) ?: -1
-            if (inputIndex >= 0) {
-                val inputBuffer = encoder?.getInputBuffer(inputIndex)
-                inputBuffer?.clear()
+            try {
+                // Use longer timeout to reduce frame drops
+                val inputIndex = encoder?.dequeueInputBuffer(10000) ?: -1
+                if (inputIndex >= 0) {
+                    val inputBuffer = encoder?.getInputBuffer(inputIndex)
+                    inputBuffer?.clear()
 
-                // Make a defensive copy to avoid race conditions
-                val position = buffer.position()
-                val dataSize = buffer.remaining()
+                    // Make a defensive copy to avoid race conditions
+                    val position = buffer.position()
+                    val dataSize = buffer.remaining()
 
-                // Validate frame size (I420 = width * height * 1.5)
-                val expectedSize = width * height * 3 / 2
-                if (dataSize != expectedSize) {
-                    Log.w(TAG, "Frame size mismatch! Expected: $expectedSize, Got: $dataSize")
+                    // Validate frame size (I420 = width * height * 1.5)
+                    val expectedSize = width * height * 3 / 2
+                    if (dataSize != expectedSize) {
+                        Log.w(TAG, "Frame size mismatch! Expected: $expectedSize, Got: $dataSize")
+                    }
+
+                    // Create a local copy of the data
+                    val frameCopy = ByteArray(dataSize)
+                    buffer.get(frameCopy)
+                    buffer.position(position) // Restore position
+
+                    // Put the copied data into encoder
+                    inputBuffer?.put(frameCopy)
+
+                    // Use smoothed timestamp for consistent frame rate
+                    // This prevents timing jitter from causing decoder issues
+                    if (baseTimestampUs == 0L) {
+                        baseTimestampUs = timestampUs
+                    }
+                    val smoothedTimestamp = baseTimestampUs + (frameIndex * targetFrameDurationUs)
+                    frameIndex++
+
+                    encoder?.queueInputBuffer(inputIndex, 0, dataSize, smoothedTimestamp, 0)
+                } else {
+                    droppedFrames++
+                    Log.w(TAG, "Dropped frame - encoder queue full (total dropped: $droppedFrames)")
                 }
 
-                // Create a local copy of the data
-                val frameCopy = ByteArray(dataSize)
-                buffer.get(frameCopy)
-                buffer.position(position) // Restore position
-
-                // Put the copied data into encoder
-                inputBuffer?.put(frameCopy)
-
-                // Use smoothed timestamp for consistent frame rate
-                // This prevents timing jitter from causing decoder issues
-                if (baseTimestampUs == 0L) {
-                    baseTimestampUs = timestampUs
+                // Log stats every 5 seconds
+                val now = System.currentTimeMillis()
+                if (now - lastLogTime > 5000) {
+                    Log.d(TAG, "Frame stats: total=$totalFrames, dropped=$droppedFrames, drop rate=${droppedFrames * 100 / maxOf(totalFrames, 1)}%")
+                    lastLogTime = now
                 }
-                val smoothedTimestamp = baseTimestampUs + (frameIndex * targetFrameDurationUs)
-                frameIndex++
-
-                encoder?.queueInputBuffer(inputIndex, 0, dataSize, smoothedTimestamp, 0)
-            } else {
-                droppedFrames++
-                Log.w(TAG, "Dropped frame - encoder queue full (total dropped: $droppedFrames)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error feeding frame from buffer: ${e.message}", e)
             }
-
-            // Log stats every 5 seconds
-            val now = System.currentTimeMillis()
-            if (now - lastLogTime > 5000) {
-                Log.d(TAG, "Frame stats: total=$totalFrames, dropped=$droppedFrames, drop rate=${droppedFrames * 100 / maxOf(totalFrames, 1)}%")
-                lastLogTime = now
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error feeding frame from buffer: ${e.message}", e)
         }
     }
 
@@ -409,14 +426,17 @@ class RTMPStreamingService(private val context: Context) {
         encoderJob?.cancel()
         encoderJob = null
 
-        // Stop and release encoder
-        try {
-            encoder?.stop()
-            encoder?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping encoder: ${e.message}")
+        // Stop and release encoder under encoderLock, so release() can never run while the frame
+        // worker or the output loop is inside a codec call on the same encoder.
+        encoderLock.withLock {
+            try {
+                encoder?.stop()
+                encoder?.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping encoder: ${e.message}")
+            }
+            encoder = null
         }
-        encoder = null
 
         // Disconnect RTMP
         try {
