@@ -1,7 +1,7 @@
 [versions]
 agp = "8.11.1"
 kotlin = "2.2.21"
-mwdat = "0.4.0"
+mwdat = "0.9.0"
 composeBom = "2026.05.01"
 lifecycle = "2.10.0"
 navigation = "2.9.8"
@@ -29,6 +29,7 @@ androidxTestRules = "1.7.0"
 mwdat-core = { group = "com.meta.wearable", name = "mwdat-core", version.ref = "mwdat" }
 mwdat-camera = { group = "com.meta.wearable", name = "mwdat-camera", version.ref = "mwdat" }
 mwdat-mockdevice = { group = "com.meta.wearable", name = "mwdat-mockdevice", version.ref = "mwdat" }
+mwdat-display = { group = "com.meta.wearable", name = "mwdat-display", version.ref = "mwdat" }
 
 # AndroidX Core
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Phone camera: only used as a MockDeviceKit feed source in debug builds -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"
         tools:ignore="ScopedStorage" />
@@ -30,10 +33,16 @@
         android:theme="@style/Theme.TurboMeta"
         tools:targetApi="31">
 
-        <!-- Meta Wearables DAT Configuration -->
+        <!-- Meta Wearables DAT Configuration.
+             Values come from manifestPlaceholders in app/build.gradle.kts
+             (local.properties mwdat_application_id / mwdat_client_token, default "0" = Developer Mode).
+             DAM_ENABLED is intentionally NOT declared: DAM is always on in 0.9.0. -->
         <meta-data
             android:name="com.meta.wearable.mwdat.APPLICATION_ID"
-            android:value="0" />
+            android:value="${mwdat_application_id}" />
+        <meta-data
+            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
+            android:value="${mwdat_client_token}" />
 
         <activity
             android:name=".MainActivity"

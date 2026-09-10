@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -5,6 +6,19 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// Optional DAT credentials. Developer Mode (Meta AI app) accepts "0" for both, which is the default.
+// To use production credentials, add to android/local.properties (git-ignored):
+//   mwdat_application_id=<APPLICATION_ID from Wearables Developer Center>
+//   mwdat_client_token=<CLIENT_TOKEN from Wearables Developer Center>
+// or pass -Pmwdat_application_id=... -Pmwdat_client_token=... on the Gradle command line.
+val localProperties =
+    Properties().apply {
+        val localPropertiesFile = rootProject.file("local.properties")
+        if (localPropertiesFile.exists()) {
+            localPropertiesFile.inputStream().use(::load)
+        }
+    }
 
 android {
     namespace = "com.smartview.glassai"
@@ -21,6 +35,14 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Meta Wearables Device Access Toolkit attestation values (see localProperties above)
+        manifestPlaceholders["mwdat_application_id"] =
+            providers.gradleProperty("mwdat_application_id").orNull
+                ?: localProperties.getProperty("mwdat_application_id", "0")
+        manifestPlaceholders["mwdat_client_token"] =
+            providers.gradleProperty("mwdat_client_token").orNull
+                ?: localProperties.getProperty("mwdat_client_token", "0")
     }
 
     signingConfigs {
@@ -91,7 +113,11 @@ dependencies {
     // Meta Wearables DAT SDK
     implementation(libs.mwdat.core)
     implementation(libs.mwdat.camera)
-    // implementation(libs.mwdat.mockdevice) // Only needed for testing
+    implementation(libs.mwdat.display)
+    debugImplementation(libs.mwdat.mockdevice)
+    // androidTest compiles against the debug variant; declare MockDeviceKit explicitly so the
+    // instrumented tests (Task 9) do not depend on AGP's tested-variant classpath inheritance.
+    androidTestImplementation(libs.mwdat.mockdevice)
 
     // AndroidX Core
     implementation(libs.androidx.core.ktx)

@@ -119,10 +119,8 @@ class MainActivity : AppCompatActivity() {
         if (sdkInitialized) return
         sdkInitialized = true
 
-        // Initialize the DAT SDK - REQUIRED before using any Wearables APIs
-        Wearables.initialize(this)
-
-        // Start observing Wearables state after SDK is initialized
+        // Wearables.initialize() already ran in TurboMetaApplication.onCreate().
+        // Start observing Wearables state once the Bluetooth runtime permissions are granted.
         wearablesViewModel.startMonitoring()
     }
 }

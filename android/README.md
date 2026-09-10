@@ -238,3 +238,16 @@ Please report issues or provide feedback.
 ## License
 
 MIT License
+
+## DAT credentials (optional) | DAT 凭据（可选）
+
+The build reads two optional keys from `android/local.properties` (git-ignored) and injects them into
+`AndroidManifest.xml` as `com.meta.wearable.mwdat.APPLICATION_ID` / `CLIENT_TOKEN`.
+When absent both default to `0`, which is what Meta AI **Developer Mode** expects.
+
+```properties
+mwdat_application_id=YOUR_APPLICATION_ID
+mwdat_client_token=YOUR_CLIENT_TOKEN
+```
+
+构建会从 `android/local.properties` 读取这两个可选键并写入清单；未设置时默认为 `0`（Meta AI 开发者模式）。
