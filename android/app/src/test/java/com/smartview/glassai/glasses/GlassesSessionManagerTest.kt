@@ -149,6 +149,30 @@ class GlassesSessionManagerTest {
     }
 
     @Test
+    fun ensureSessionReturnsFalseWhilePreviousSessionIsStopping() = runTest(UnconfinedTestDispatcher()) {
+        factory.stopAsync = true
+        val manager = newManager()
+        manager.acquire("A")
+        val first = factory.last
+        first.emitStarted()
+
+        manager.release("A") // last owner: stop() only reaches STOPPING (real SDK behaviour)
+        assertTrue(manager.isStoppingPreviousSession)
+
+        // Creating now would hit SESSION_ALREADY_EXISTS on the real SDK: refuse instead.
+        assertFalse(manager.ensureSession())
+        assertEquals(1, factory.createCalls)
+        assertFalse(manager.hasSession)
+
+        first.emitStoppedByDevice() // the SDK finishes the stop
+        assertFalse(manager.isStoppingPreviousSession)
+
+        assertTrue(manager.ensureSession())
+        assertEquals(2, factory.createCalls)
+        assertEquals(1, factory.last.startCalls)
+    }
+
+    @Test
     fun ensureSessionStartedGivesUpWaitingForStoppedAfterTimeout() = runTest(UnconfinedTestDispatcher()) {
         factory.stopAsync = true
         val manager = newManager()

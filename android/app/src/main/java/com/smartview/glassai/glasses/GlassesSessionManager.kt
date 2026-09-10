@@ -165,10 +165,17 @@ class GlassesSessionManager internal constructor(
     }
 
     /**
-     * Synchronous create + start if no session exists (does not wait for a stopping session).
-     * @return false if the SDK refused; the error is emitted on [sessionError].
+     * Synchronous create + start if no session exists.
+     *
+     * Refuses while the previous session is still STOPPING (returns false, emits nothing): the SDK
+     * would answer SESSION_ALREADY_EXISTS. Callers that need a session after a stop must use
+     * [ensureSessionStarted], which waits for STOPPED and retries.
+     *
+     * @return false if the previous session is still stopping, or if the SDK refused — in the
+     *   latter case the error is emitted on [sessionError].
      */
     fun ensureSession(): Boolean {
+        if (stoppingSession != null) return false
         val error = createSessionIfNeeded() ?: return true
         _sessionState.value = DeviceSessionState.STOPPED
         _sessionError.tryEmit(error)
