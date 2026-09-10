@@ -9,15 +9,16 @@ import android.graphics.YuvImage
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.meta.wearable.dat.camera.StreamSession
-import com.meta.wearable.dat.camera.startStreamSession
 import com.meta.wearable.dat.camera.types.StreamConfiguration
-import com.meta.wearable.dat.camera.types.StreamSessionState
+import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
-import com.meta.wearable.dat.core.Wearables
-import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
-import com.meta.wearable.dat.core.selectors.DeviceSelector
+import com.smartview.glassai.R
+import com.smartview.glassai.glasses.CameraError
+import com.smartview.glassai.glasses.CameraResult
+import com.smartview.glassai.glasses.GlassesCamera
+import com.smartview.glassai.glasses.GlassesSessionManager
+import com.smartview.glassai.glasses.SessionStartResult
 import com.smartview.glassai.services.RTMPStreamingService
 import com.smartview.glassai.utils.APIKeyManager
 import kotlinx.coroutines.Job
@@ -26,16 +27,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 /**
  * RTMPStreamingViewModel - Manages RTMP streaming from glasses camera
  *
- * Integrates DAT SDK video stream with RTMPStreamingService for live broadcasting.
+ * Borrows the camera from the shared GlassesSessionManager (DAT 0.9.0) and feeds raw I420 frames
+ * to RTMPStreamingService for live broadcasting.
  */
 class RTMPStreamingViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "RTMPStreamingVM"
+        private const val OWNER = "RTMPStreamingViewModel"
+        private const val SESSION_START_TIMEOUT_MS = 12_000L
         const val DEFAULT_RTMP_URL = "rtmp://localhost/live/stream"
     }
 
@@ -59,20 +64,24 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private val _streamStats = MutableStateFlow(RTMPStreamingService.StreamingStats())
     val streamStats: StateFlow<RTMPStreamingService.StreamingStats> = _streamStats.asStateFlow()
 
-    private val _cameraState = MutableStateFlow<StreamSessionState?>(null)
-    val cameraState: StateFlow<StreamSessionState?> = _cameraState.asStateFlow()
+    private val _cameraState = MutableStateFlow<DatStreamState?>(null)
+    val cameraState: StateFlow<DatStreamState?> = _cameraState.asStateFlow()
 
     private val _bitrate = MutableStateFlow(2_000_000) // 2 Mbps default
     val bitrate: StateFlow<Int> = _bitrate.asStateFlow()
 
     // Services
     private val rtmpService = RTMPStreamingService(application)
-    private val deviceSelector: DeviceSelector = AutoDeviceSelector()
+    private val sessionManager: GlassesSessionManager by lazy {
+        GlassesSessionManager.getInstance(application)
+    }
 
-    // Stream session
-    private var streamSession: StreamSession? = null
+    // Borrowed camera + jobs
+    private var camera: GlassesCamera? = null
+    private var startJob: Job? = null
     private var videoJob: Job? = null
     private var stateJob: Job? = null
+    private var streamErrorJob: Job? = null
     private var statsJob: Job? = null
 
     // Video parameters (set when stream starts)
@@ -135,9 +144,9 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
 
     /**
      * Start RTMP streaming
-     * 1. Starts camera stream from glasses
-     * 2. Connects to RTMP server
-     * 3. Begins encoding and streaming
+     * 1. Borrows the glasses camera from the shared session
+     * 2. Connects to the RTMP server after the first frame (dimensions known)
+     * 3. Encodes and streams
      */
     fun startStreaming() {
         if (_uiState.value == UIState.Streaming || _uiState.value == UIState.Connecting) {
@@ -153,13 +162,9 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun startCameraStream() {
-        // Cancel any existing jobs
-        videoJob?.cancel()
-        stateJob?.cancel()
-
-        // Close existing session
-        streamSession?.close()
-        streamSession = null
+        cancelCameraJobs()
+        camera = null
+        sessionManager.stopCamera(OWNER)
 
         // Get video quality setting
         val apiKeyManager = APIKeyManager.getInstance(getApplication())
@@ -172,40 +177,99 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
 
         Log.d(TAG, "Starting camera stream with quality: $savedQuality")
 
-        // Create stream session
-        val session = Wearables.startStreamSession(
-            getApplication(),
-            deviceSelector,
-            StreamConfiguration(videoQuality = videoQuality, 24)
-        ).also { streamSession = it }
+        startJob = viewModelScope.launch {
+            sessionManager.acquire(OWNER)
+            when (sessionManager.ensureSessionStarted(SESSION_START_TIMEOUT_MS)) {
+                SessionStartResult.STARTED -> Unit
+                SessionStartResult.CREATE_FAILED -> {
+                    failCamera(getApplication<Application>().getString(R.string.glasses_session_failed))
+                    return@launch
+                }
+                SessionStartResult.NOT_STARTED -> {
+                    failCamera(getApplication<Application>().getString(R.string.glasses_session_timeout))
+                    return@launch
+                }
+            }
+            val config = StreamConfiguration(videoQuality = videoQuality, frameRate = 24)
+            when (val result = sessionManager.addCamera(OWNER, config)) {
+                is CameraResult.Ready -> attachCamera(result.camera)
+                is CameraResult.Failed -> failCamera(cameraErrorMessage(result.error))
+            }
+        }
+    }
 
-        // Monitor stream state
+    private fun attachCamera(borrowed: GlassesCamera) {
+        camera = borrowed
+
+        // Subscribe BEFORE start()
         stateJob = viewModelScope.launch {
-            session.state.collect { state ->
+            var hasBeenActive = false
+            borrowed.streamState.collect { state ->
                 Log.d(TAG, "Camera state: $state")
                 _cameraState.value = state
 
                 when (state) {
-                    StreamSessionState.STREAMING -> {
+                    DatStreamState.STREAMING -> {
+                        hasBeenActive = true
                         // Camera is ready, RTMP will connect after first frame arrives
                         Log.d(TAG, "Camera streaming, waiting for first frame...")
                     }
-                    StreamSessionState.STOPPED -> {
-                        if (rtmpService.isStreaming()) {
+                    DatStreamState.STARTING,
+                    DatStreamState.STARTED,
+                    DatStreamState.STOPPING,
+                    DatStreamState.PAUSED -> {
+                        hasBeenActive = true
+                    }
+                    DatStreamState.STOPPED,
+                    DatStreamState.CLOSED -> {
+                        if (hasBeenActive) {
+                            hasBeenActive = false
+                            Log.d(TAG, "Camera stream ended; stopping RTMP")
                             stopStreaming()
                         }
                     }
-                    else -> { }
                 }
             }
         }
 
-        // Collect video frames
+        streamErrorJob = viewModelScope.launch {
+            borrowed.streamErrors.collect { error ->
+                Log.e(TAG, "Stream error: ${error.description}")
+                _uiState.value = UIState.Error(error.getLocalizedDescription(getApplication()))
+            }
+        }
+
         videoJob = viewModelScope.launch {
             frameTimestampBase = 0L
-            session.videoStream.collect { videoFrame ->
+            borrowed.videoFrames.collect { videoFrame ->
+                if (videoFrame.isCompressed || videoFrame.isCodecConfig) return@collect
                 handleVideoFrame(videoFrame)
             }
+        }
+
+        val startError = borrowed.startStream()
+        if (startError != null) {
+            failCamera(startError.getLocalizedDescription(getApplication()))
+        }
+    }
+
+    private fun failCamera(message: String) {
+        Log.e(TAG, "Camera failure: $message")
+        cancelCameraJobs()
+        camera = null
+        sessionManager.stopCamera(OWNER)
+        sessionManager.release(OWNER)
+        _cameraState.value = null
+        _uiState.value = UIState.Error(message)
+    }
+
+    private fun cameraErrorMessage(error: CameraError): String {
+        val app = getApplication<Application>()
+        return when (error) {
+            is CameraError.CameraBusy -> app.getString(R.string.glasses_camera_busy)
+            CameraError.NoSession -> app.getString(R.string.glasses_no_session)
+            CameraError.SessionNotStarted -> app.getString(R.string.glasses_session_timeout)
+            is CameraError.Sdk -> error.error.getLocalizedDescription(app)
         }
     }
 
@@ -226,11 +290,17 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun handleVideoFrame(videoFrame: VideoFrame) {
+        // Copy the SDK buffer FIRST: VideoFrame.buffer is only guaranteed valid inside collect {}
+        // (spec §5.8). Everything below works on our own copy.
+        val i420 = copyFrame(videoFrame) ?: return
+        val width = videoFrame.width
+        val height = videoFrame.height
+
         // Set video dimensions on first frame and connect RTMP
         if (videoWidth == 0 || videoHeight == 0) {
             // Use original dimensions - modern MediaCodec handles alignment internally
-            videoWidth = videoFrame.width
-            videoHeight = videoFrame.height
+            videoWidth = width
+            videoHeight = height
             Log.d(TAG, "Video dimensions: ${videoWidth}x${videoHeight}")
 
             // Now connect RTMP with proper dimensions
@@ -247,34 +317,39 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
             System.nanoTime() / 1000 - frameTimestampBase
         }
 
-        // Feed raw frame to RTMP encoder
+        // Feed the copied I420 frame to the RTMP encoder (ByteBuffer overload: timestamp smoothing)
         rtmpService.feedFrame(
-            buffer = videoFrame.buffer,
-            width = videoFrame.width,
-            height = videoFrame.height,
+            buffer = ByteBuffer.wrap(i420),
+            width = width,
+            height = height,
             timestampUs = timestampUs
         )
 
-        // Also update preview (convert to bitmap for display)
-        updatePreview(videoFrame)
+        // Also update preview (convert to bitmap for display) from the same copy
+        updatePreview(i420, width, height)
     }
 
-    private fun updatePreview(videoFrame: VideoFrame) {
+    /** Defensive copy of the SDK frame; null if the buffer could not be read. */
+    private fun copyFrame(videoFrame: VideoFrame): ByteArray? = try {
+        val buffer = videoFrame.buffer
+        val originalPosition = buffer.position()
+        val copy = ByteArray(buffer.remaining())
+        buffer.get(copy)
+        buffer.position(originalPosition)
+        copy
+    } catch (e: Exception) {
+        Log.e(TAG, "Error copying video frame: ${e.message}")
+        null
+    }
+
+    private fun updatePreview(i420: ByteArray, width: Int, height: Int) {
         try {
-            val buffer = videoFrame.buffer
-            val dataSize = buffer.remaining()
-            val byteArray = ByteArray(dataSize)
-
-            val originalPosition = buffer.position()
-            buffer.get(byteArray)
-            buffer.position(originalPosition)
-
             // Convert I420 to NV21 for preview
-            val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
-            val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
+            val nv21 = convertI420toNV21(i420, width, height)
+            val image = YuvImage(nv21, ImageFormat.NV21, width, height, null)
 
             val jpegBytes = ByteArrayOutputStream().use { stream ->
-                image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
+                image.compressToJpeg(Rect(0, 0, width, height), 50, stream)
                 stream.toByteArray()
             }
 
@@ -299,6 +374,17 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         return output
     }
 
+    private fun cancelCameraJobs() {
+        startJob?.cancel()
+        startJob = null
+        videoJob?.cancel()
+        videoJob = null
+        stateJob?.cancel()
+        stateJob = null
+        streamErrorJob?.cancel()
+        streamErrorJob = null
+    }
+
     /**
      * Stop streaming
      */
@@ -308,20 +394,18 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         // Stop RTMP service
         rtmpService.stopStreaming()
 
-        // Stop camera stream
-        videoJob?.cancel()
-        videoJob = null
-        stateJob?.cancel()
-        stateJob = null
-
-        streamSession?.close()
-        streamSession = null
+        // Give the camera and the session claim back
+        cancelCameraJobs()
+        camera = null
+        sessionManager.stopCamera(OWNER)
+        sessionManager.release(OWNER)
 
         // Reset
         videoWidth = 0
         videoHeight = 0
         frameTimestampBase = 0L
         _previewFrame.value = null
+        _cameraState.value = null
         _uiState.value = UIState.Idle
     }
 

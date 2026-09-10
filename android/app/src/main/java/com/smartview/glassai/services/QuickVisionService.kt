@@ -20,27 +20,27 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.meta.wearable.dat.camera.StreamSession
-import com.meta.wearable.dat.camera.startStreamSession
+import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
-import com.meta.wearable.dat.camera.types.StreamSessionState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
-import com.meta.wearable.dat.core.Wearables
-import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
+import com.smartview.glassai.glasses.CameraError
+import com.smartview.glassai.glasses.GlassesPhotoCapturer
+import com.smartview.glassai.glasses.GlassesSessionManager
+import com.smartview.glassai.glasses.PhotoCaptureOutcome
 import com.smartview.glassai.MainActivity
 import com.smartview.glassai.R
 import com.smartview.glassai.data.QuickVisionStorage
 import com.smartview.glassai.managers.APIProviderManager
 import com.smartview.glassai.managers.QuickVisionModeManager
 import com.smartview.glassai.utils.APIKeyManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -61,6 +61,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         private const val TAG = "QuickVisionService"
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "quick_vision_channel"
+        private const val OWNER = "QuickVisionService"
 
         // Service actions
         const val ACTION_CAPTURE_AND_ANALYZE = "com.smartview.glassai.CAPTURE_AND_ANALYZE"
@@ -87,12 +88,9 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     private var systemLocale: Locale = Locale.getDefault()  // 系统语言，用于状态提示
     private var outputLocale: Locale = Locale.US  // 输出语言，用于AI回复
 
-    // DAT SDK components
-    private val deviceSelector = AutoDeviceSelector()
-    private var streamSession: StreamSession? = null
-    private var videoJob: Job? = null
-    private var stateJob: Job? = null
-    private var capturedFrame: Bitmap? = null
+    // DAT SDK: the camera is borrowed from the process-wide session owner through GlassesPhotoCapturer
+    private val sessionManager: GlassesSessionManager by lazy { GlassesSessionManager.getInstance(this) }
+    private var captureJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -173,19 +171,19 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun cleanup() {
-        videoJob?.cancel()
-        videoJob = null
-        stateJob?.cancel()
-        stateJob = null
-        streamSession?.close()
-        streamSession = null
-        capturedFrame = null
+        // GlassesPhotoCapturer.capture() releases the camera and the owner claim in its finally block,
+        // also when the job is cancelled here; stopCamera/release are idempotent, so calling them
+        // again is only a safety net for a capture that never started.
+        captureJob?.cancel()
+        captureJob = null
+        sessionManager.stopCamera(OWNER)
+        sessionManager.release(OWNER)
     }
 
     private fun captureAndAnalyze() {
         Log.d(TAG, "captureAndAnalyze called")
 
-        scope.launch {
+        captureJob = scope.launch {
             try {
                 // Wait for TTS to initialize
                 withTimeoutOrNull(2000) {
@@ -201,116 +199,109 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                     }
                 }
 
-                // 1. Announce "正在识别"
+                // 1. Announce "looking"
                 val lookingText = getLocalizedString("looking")
                 Log.d(TAG, "Speaking: $lookingText")
                 speak(lookingText)
 
-                // 2. Check if device is available
-                val hasDevice = deviceSelector.activeDevice(Wearables.devices).first() != null
-                if (!hasDevice) {
-                    Log.e(TAG, "No device connected")
-                    speak(getLocalizedString("no_device"))
-                    broadcastStatus("error")
-                    delay(2000)
-                    finishService()
-                    return@launch
-                }
-
-                // 3. Start stream
-                Log.d(TAG, "Starting stream session...")
+                // 2. Borrow the shared session + camera and take the photo (see GlassesPhotoCapturer)
+                Log.d(TAG, "Acquiring shared glasses session...")
                 broadcastStatus("streaming")
 
-                val session = Wearables.startStreamSession(
-                    this@QuickVisionService,
-                    deviceSelector,
-                    StreamConfiguration(videoQuality = VideoQuality.MEDIUM, 24)
-                ).also { streamSession = it }
-
-                // 4. Wait for streaming state
-                var isStreaming = false
-                var frameReceived = false
-
-                stateJob = launch {
-                    session.state.collect { state ->
-                        Log.d(TAG, "Stream state: $state")
-                        if (state == StreamSessionState.STREAMING) {
-                            isStreaming = true
-                        }
+                val capturer = GlassesPhotoCapturer(
+                    sessionManager = sessionManager,
+                    owner = OWNER,
+                    config = StreamConfiguration(videoQuality = VideoQuality.MEDIUM, frameRate = 24),
+                    decodePhoto = ::decodePhoto,
+                    decodeFrame = ::convertVideoFrameToBitmap,
+                )
+                val image: Bitmap = when (val outcome = capturer.capture()) {
+                    is PhotoCaptureOutcome.Captured -> {
+                        Log.d(
+                            TAG,
+                            "Image ready (fromVideoFrame=${outcome.fromVideoFrame}): " +
+                                "${outcome.image.width}x${outcome.image.height}"
+                        )
+                        outcome.image
+                    }
+                    PhotoCaptureOutcome.NoDevice -> {
+                        Log.e(TAG, "No device connected")
+                        failAndFinish("no_device")
+                        return@launch
+                    }
+                    PhotoCaptureOutcome.SessionFailed,
+                    PhotoCaptureOutcome.SessionTimeout -> {
+                        Log.e(TAG, "Shared session unavailable: $outcome")
+                        failAndFinish("error")
+                        return@launch
+                    }
+                    is PhotoCaptureOutcome.CameraUnavailable -> {
+                        Log.e(TAG, "addCamera refused: ${outcome.error}")
+                        // Another feature (e.g. the Live AI screen) holds the camera: say so and leave it alone
+                        failAndFinish(if (outcome.error is CameraError.CameraBusy) "camera_busy" else "error")
+                        return@launch
+                    }
+                    is PhotoCaptureOutcome.StreamStartFailed -> {
+                        Log.e(TAG, "stream.start failed: ${outcome.error.description}")
+                        failAndFinish("error")
+                        return@launch
+                    }
+                    PhotoCaptureOutcome.StreamTimeout -> {
+                        Log.e(TAG, "Stream did not reach STREAMING within the budget")
+                        failAndFinish("error")
+                        return@launch
+                    }
+                    PhotoCaptureOutcome.NoImage -> {
+                        Log.e(TAG, "No image captured")
+                        failAndFinish("no_image")
+                        return@launch
                     }
                 }
 
-                videoJob = launch {
-                    session.videoStream.collect { videoFrame ->
-                        if (!frameReceived && isStreaming) {
-                            Log.d(TAG, "First frame received, capturing...")
-                            capturedFrame = convertVideoFrameToBitmap(videoFrame)
-                            frameReceived = true
-                        }
+                // 3. Analyze the captured image (camera and session claim are already released)
+                Log.d(TAG, "Analyzing captured image: ${image.width}x${image.height}")
+                broadcastStatus("analyzing")
+                updateNotification(getLocalizedString("analyzing"))
+
+                val language = apiKeyManager.getOutputLanguage()
+                val result = visionService.quickVision(image, language)
+
+                result.fold(
+                    onSuccess = { description ->
+                        Log.d(TAG, "Analysis result: $description")
+
+                        // Save record with thumbnail
+                        val prompt = modeManager.getPrompt()
+                        val currentMode = modeManager.currentMode.value
+                        val visionModel = providerManager.selectedModel.value
+                        quickVisionStorage.saveRecord(
+                            bitmap = image,
+                            prompt = prompt,
+                            result = description,
+                            mode = currentMode,
+                            visionModel = visionModel
+                        )
+                        Log.d(TAG, "Record saved with thumbnail")
+
+                        broadcastResult(description)
+                        broadcastStatus("complete")
+                        speakAndWait(description, useOutputLocale = true)  // AI reply uses the output language
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Analysis failed: ${error.message}")
+                        speak(getLocalizedString("analysis_failed"))
+                        broadcastError(error.message ?: "Unknown error")
+                        broadcastStatus("error")
                     }
-                }
-
-                // Wait for stream to be ready and capture frame
-                val timeout = 8000L
-                val startTime = System.currentTimeMillis()
-                while (!frameReceived && System.currentTimeMillis() - startTime < timeout) {
-                    delay(100)
-                }
-
-                // 5. Stop stream
-                Log.d(TAG, "Stopping stream...")
-                videoJob?.cancel()
-                stateJob?.cancel()
-                session.close()
-                streamSession = null
-
-                // 6. Analyze the captured frame
-                val image = capturedFrame
-                if (image != null) {
-                    Log.d(TAG, "Analyzing captured image: ${image.width}x${image.height}")
-                    broadcastStatus("analyzing")
-                    updateNotification(getLocalizedString("analyzing"))
-
-                    val language = apiKeyManager.getOutputLanguage()
-                    val result = visionService.quickVision(image, language)
-
-                    result.fold(
-                        onSuccess = { description ->
-                            Log.d(TAG, "Analysis result: $description")
-
-                            // Save record with thumbnail
-                            val prompt = modeManager.getPrompt()
-                            val currentMode = modeManager.currentMode.value
-                            val visionModel = providerManager.selectedModel.value
-                            quickVisionStorage.saveRecord(
-                                bitmap = image,
-                                prompt = prompt,
-                                result = description,
-                                mode = currentMode,
-                                visionModel = visionModel
-                            )
-                            Log.d(TAG, "Record saved with thumbnail")
-
-                            broadcastResult(description)
-                            broadcastStatus("complete")
-                            speakAndWait(description, useOutputLocale = true)  // AI回复使用输出语言
-                        },
-                        onFailure = { error ->
-                            Log.e(TAG, "Analysis failed: ${error.message}")
-                            speak(getLocalizedString("analysis_failed"))
-                            broadcastError(error.message ?: "Unknown error")
-                            broadcastStatus("error")
-                        }
-                    )
-                } else {
-                    Log.e(TAG, "No frame captured")
-                    speak(getLocalizedString("no_image"))
-                    broadcastStatus("error")
-                }
+                )
 
                 delay(500)
                 finishService()
 
+            } catch (e: CancellationException) {
+                // cleanup() cancelled us because the service is stopping; the capturer already
+                // released the camera and the owner claim in its finally block.
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error in captureAndAnalyze: ${e.message}", e)
                 speak(getLocalizedString("error"))
@@ -318,6 +309,24 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                 delay(2000)
                 finishService()
             }
+        }
+    }
+
+    /** Announces [key], tells PorcupineWakeWordService we failed, and stops after 2 s. */
+    private suspend fun failAndFinish(key: String) {
+        speak(getLocalizedString(key))
+        broadcastStatus("error")
+        delay(2000)
+        finishService()
+    }
+
+    private fun decodePhoto(photo: PhotoData): Bitmap? = when (photo) {
+        is PhotoData.Bitmap -> photo.bitmap
+        is PhotoData.HEIC -> {
+            val buffer = photo.data.duplicate().apply { rewind() }
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         }
     }
 
@@ -439,6 +448,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                 isKorean -> "이미지 분석 실패"
                 else -> "Image analysis failed"
             }
+            "camera_busy" -> getString(R.string.glasses_camera_busy)
             else -> key
         }
     }
