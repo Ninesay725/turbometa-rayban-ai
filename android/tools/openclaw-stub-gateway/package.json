@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-stub-gateway",
+  "private": true,
+  "type": "module",
+  "description": "Minimal OpenClaw Gateway stand-in for the TurboMeta Android manual checklist (no AI, echoes chat, requests camera.snap)",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

@@ -1,6 +1,7 @@
 package com.smartview.glassai.glasses
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -25,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
@@ -239,6 +241,98 @@ class GlassesSessionManagerInstrumentedTest {
         manager.release(OWNER)
         withTimeout(SESSION_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STOPPED } }
         assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
+    }
+
+    /** Phase B: the OpenClaw camera.snap source borrows the camera through the shared session. */
+    @Test
+    fun openClawFrameProviderSnapsThroughTheSharedSession() {
+        val provider = SessionFrameProvider(
+            sessionManager = { manager },
+            isForeground = { true },
+            checkPermission = { CameraPermissionCheck.Granted },
+            encode = SessionFrameProvider.Companion::encodeBitmap,
+            capture = { m ->
+                val capturer = GlassesPhotoCapturer(
+                    sessionManager = m,
+                    owner = SessionFrameProvider.OWNER,
+                    config = config,
+                    decodePhoto = FrameConversions::decodePhoto,
+                    decodeFrame = { FrameConversions.frameToBitmap(it, FrameConversions.CAPTURE_JPEG_QUALITY) },
+                )
+                withContext(Dispatchers.Main.immediate) { capturer.capture() }
+            },
+        )
+        runBlocking { awaitActiveDevice() }
+
+        val result = runBlocking { provider.snapshot(maxWidth = 640, quality = 0.8, timeoutMs = STREAM_TIMEOUT_MS) }
+
+        assertTrue("expected Ok but was $result", result is SnapshotResult.Ok)
+        val frame = (result as SnapshotResult.Ok).frame
+        assertTrue(frame.width in 1..640)
+        assertEquals(0xFF.toByte(), frame.jpeg[0])
+        assertEquals(0xD8.toByte(), frame.jpeg[1])
+        onMain {
+            assertNull(manager.currentCameraOwner)
+            assertEquals(0, manager.ownerCount)
+        }
+    }
+
+    // ---- Phase A final review Minor #19 / Recommendation 4: PAUSED/resume and device-side stop ----
+
+    /** MockDeviceKit: a single captouch tap toggles pause/resume of the active stream. */
+    @Test
+    fun captouchTapPausesAndResumesTheStreamWithoutTeardown(): Unit = onMain {
+        awaitActiveDevice()
+        manager.acquire(OWNER)
+        assertEquals(SessionStartResult.STARTED, manager.ensureSessionStarted(SESSION_TIMEOUT_MS))
+        val camera = (manager.addCamera(OWNER, config) as CameraResult.Ready).camera
+        assertNull(camera.startStream())
+        withTimeout(STREAM_TIMEOUT_MS) { camera.streamState.first { it == DatStreamState.STREAMING } }
+        delay(STREAM_SETTLE_MS) // see STREAM_SETTLE_MS
+
+        device.services.captouch.tap()
+        withTimeout(STREAM_TIMEOUT_MS) { camera.streamState.first { it == DatStreamState.PAUSED } }
+        // DAT 0.9.0 propagates the captouch pause to the *session* too (logcat:
+        // "session state: PAUSED"), so sessionState is PAUSED here, not STARTED. What the test
+        // asserts is that this is not a teardown: the owner keeps the camera and the session
+        // object survives (onSessionState only tears down on STOPPED).
+        withTimeout(STREAM_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.PAUSED } }
+        assertEquals(OWNER, manager.currentCameraOwner)
+        assertTrue(manager.hasSession)
+
+        device.services.captouch.tap()
+        withTimeout(STREAM_TIMEOUT_MS) { camera.streamState.first { it == DatStreamState.STREAMING } }
+        withTimeout(STREAM_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STARTED } }
+        assertEquals(OWNER, manager.currentCameraOwner)
+        delay(STREAM_SETTLE_MS)
+
+        manager.stopCamera(OWNER)
+        manager.release(OWNER)
+        withTimeout(SESSION_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STOPPED } }
+    }
+
+    /** Folding the glasses ends the session from the device side (teardownAfterDeviceStop path). */
+    @Test
+    fun foldingTheGlassesStopsTheSessionFromTheDeviceSide(): Unit = onMain {
+        awaitActiveDevice()
+        manager.acquire(OWNER)
+        assertEquals(SessionStartResult.STARTED, manager.ensureSessionStarted(SESSION_TIMEOUT_MS))
+        val camera = (manager.addCamera(OWNER, config) as CameraResult.Ready).camera
+        assertNull(camera.startStream())
+        withTimeout(STREAM_TIMEOUT_MS) { camera.streamState.first { it == DatStreamState.STREAMING } }
+        delay(STREAM_SETTLE_MS)
+        manager.publishFrame(OWNER, Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888))
+        assertTrue(manager.latestFrame.value != null)
+
+        device.fold()
+
+        withTimeout(SESSION_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STOPPED } }
+        assertNull(manager.currentCameraOwner)
+        assertNull(manager.latestFrame.value)
+        assertFalse(manager.hasSession)
+        manager.release(OWNER)
+        assertEquals(0, manager.ownerCount)
+        device.unfold() // leave the mock in the state setUp() expects
     }
 
     // ---- helpers ----
