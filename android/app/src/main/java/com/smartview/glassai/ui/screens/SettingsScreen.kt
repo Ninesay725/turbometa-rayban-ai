@@ -49,6 +49,9 @@ import com.smartview.glassai.managers.AppLanguage
 import com.smartview.glassai.managers.LiveAIProvider
 import com.smartview.glassai.managers.OpenRouterModel
 import com.smartview.glassai.services.PorcupineWakeWordService
+import com.smartview.glassai.services.openclaw.OpenClawNodeService
+import com.smartview.glassai.ui.components.openClawStatusColor
+import com.smartview.glassai.ui.components.openClawStatusText
 import com.smartview.glassai.ui.components.*
 import com.smartview.glassai.ui.theme.*
 import com.smartview.glassai.utils.AIModel
@@ -64,9 +67,11 @@ fun SettingsScreen(
     onNavigateToRecords: () -> Unit,
     onNavigateToQuickVisionMode: () -> Unit = {},
     onNavigateToLiveAIMode: () -> Unit = {},
-    onNavigateToMockDeviceKit: () -> Unit = {}
+    onNavigateToMockDeviceKit: () -> Unit = {},
+    onNavigateToOpenClawSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val openClawState by remember { OpenClawNodeService.getInstance(context) }.connectionState.collectAsState()
 
     // Provider states
     val visionProvider by viewModel.visionProvider.collectAsState()
@@ -395,6 +400,17 @@ fun SettingsScreen(
                     title = stringResource(R.string.video_quality),
                     subtitle = stringResource(viewModel.getSelectedQuality().displayNameResId),
                     onClick = { viewModel.showQualityDialog() }
+                )
+            }
+
+            // Integrations Section (Phase B: OpenClaw)
+            SettingsSection(title = stringResource(R.string.settings_integrations)) {
+                SettingsItem(
+                    icon = Icons.Default.Link,
+                    title = stringResource(R.string.openclaw_title),
+                    subtitle = openClawStatusText(openClawState),
+                    subtitleColor = openClawStatusColor(openClawState),
+                    onClick = onNavigateToOpenClawSettings
                 )
             }
 

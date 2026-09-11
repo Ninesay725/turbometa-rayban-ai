@@ -463,4 +463,52 @@
 
     <!-- Phase B Task 1: WearablesViewModel messages that were hard-coded English -->
     <string name="glasses_permission_check_failed">无法检查眼镜相机权限：%1$s</string>
+
+    <!-- Phase B: OpenClaw（文案来自 iOS zh-Hans.lproj/Localizable.strings） -->
+    <string name="settings_integrations">集成</string>
+    <string name="openclaw_title">OpenClaw</string>
+    <string name="openclaw_status_title">状态</string>
+    <string name="openclaw_status_connected">已连接</string>
+    <string name="openclaw_status_connecting">连接中...</string>
+    <string name="openclaw_status_reconnecting">重连中（第 %1$d 次）...</string>
+    <string name="openclaw_status_pairing">等待配对</string>
+    <string name="openclaw_status_disconnected">未连接</string>
+    <string name="openclaw_connect">连接 Gateway</string>
+    <string name="openclaw_disconnect">断开连接</string>
+    <string name="openclaw_pairing_hint">请在 OpenClaw 终端执行 openclaw devices approve 完成配对</string>
+    <string name="openclaw_gateway_section">Gateway</string>
+    <string name="openclaw_gateway_help">输入运行 OpenClaw Gateway 的设备地址和端口。本机默认为 127.0.0.1:18789</string>
+    <string name="openclaw_host">地址</string>
+    <string name="openclaw_port">端口</string>
+    <string name="openclaw_scheme">协议</string>
+    <string name="openclaw_token">Gateway 令牌</string>
+    <string name="openclaw_capabilities">设备能力</string>
+    <string name="openclaw_capabilities_desc">连接后，OpenClaw AI 可以通过眼镜拍照、获取设备状态等</string>
+    <string name="openclaw_node_id">节点 ID</string>
+    <string name="openclaw_commands">命令</string>
+    <string name="feature_openclaw_title">OpenClaw</string>
+    <string name="feature_openclaw_subtitle">OpenClaw</string>
+    <string name="feature_openclaw_connected">已连接</string>
+    <string name="openclaw_chat_placeholder">输入消息...</string>
+    <string name="openclaw_chat_photoprompt">请看这张眼镜拍摄的照片</string>
+    <string name="openclaw_chat_snap">拍照发送</string>
+    <string name="openclaw_chat_sending">发送中...</string>
+    <string name="openclaw_chat_noframe">无法获取眼镜画面，请确认眼镜已连接</string>
+    <string name="openclaw_chat_noapikey">请先在设置中配置阿里云 API Key</string>
+    <string name="openclaw_chat_sendvoice">发送</string>
+    <string name="openclaw_chat_text">键盘</string>
+    <string name="openclaw_chat_listening">正在聆听...</string>
+    <string name="openclaw_chat_mic">语音</string>
+    <string name="openclaw_chat_stop">停止</string>
+    <string name="openclaw_chat_asr_failed">语音识别失败：%1$s</string>
+    <!-- FunASRService 的英文底层错误文案对应的本地化文案 -->
+    <string name="openclaw_asr_error_mic">麦克风不可用</string>
+    <string name="openclaw_asr_error_connection">连接失败</string>
+    <string name="openclaw_asr_error_task">语音识别服务错误</string>
+    <string name="openclaw_error_max_retries">连接失败，已重试 %1$d 次</string>
+    <string name="openclaw_error_transport">连接错误：%1$s</string>
+    <string name="openclaw_error_invalid_url">Gateway 地址无效</string>
+    <string name="audio_source_phone">手机麦克风</string>
+    <string name="audio_source_glasses">眼镜麦克风</string>
+    <string name="done">完成</string>
 </resources>

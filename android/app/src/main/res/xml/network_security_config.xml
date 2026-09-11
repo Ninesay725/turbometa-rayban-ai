@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The OpenClaw Gateway is a LAN service reached over plain ws:// (spec §6 B1). Android blocks
+  cleartext by default from targetSdk 28 on, so it is allowed here; every cloud service the app
+  talks to (DashScope, OpenRouter, Google) is https/wss and unaffected.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

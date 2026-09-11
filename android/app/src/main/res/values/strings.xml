@@ -463,4 +463,52 @@
 
     <!-- Phase B Task 1: WearablesViewModel messages that were hard-coded English -->
     <string name="glasses_permission_check_failed">Could not check the glasses camera permission: %1$s</string>
+
+    <!-- Phase B: OpenClaw (texts copied from the iOS en.lproj/Localizable.strings) -->
+    <string name="settings_integrations">Integrations</string>
+    <string name="openclaw_title">OpenClaw</string>
+    <string name="openclaw_status_title">Status</string>
+    <string name="openclaw_status_connected">Connected</string>
+    <string name="openclaw_status_connecting">Connecting...</string>
+    <string name="openclaw_status_reconnecting">Reconnecting (attempt %1$d)...</string>
+    <string name="openclaw_status_pairing">Waiting for pairing</string>
+    <string name="openclaw_status_disconnected">Not connected</string>
+    <string name="openclaw_connect">Connect to Gateway</string>
+    <string name="openclaw_disconnect">Disconnect</string>
+    <string name="openclaw_pairing_hint">Run \'openclaw devices approve\' in your terminal to complete pairing</string>
+    <string name="openclaw_gateway_section">Gateway</string>
+    <string name="openclaw_gateway_help">Enter the address and port of the device running OpenClaw Gateway. Default is 127.0.0.1:18789</string>
+    <string name="openclaw_host">Host</string>
+    <string name="openclaw_port">Port</string>
+    <string name="openclaw_scheme">Protocol</string>
+    <string name="openclaw_token">Gateway Token</string>
+    <string name="openclaw_capabilities">Device Capabilities</string>
+    <string name="openclaw_capabilities_desc">When connected, OpenClaw AI can capture photos through the glasses, check device status, etc.</string>
+    <string name="openclaw_node_id">Node ID</string>
+    <string name="openclaw_commands">Commands</string>
+    <string name="feature_openclaw_title">OpenClaw</string>
+    <string name="feature_openclaw_subtitle">OpenClaw</string>
+    <string name="feature_openclaw_connected">Connected</string>
+    <string name="openclaw_chat_placeholder">Type a message...</string>
+    <string name="openclaw_chat_photoprompt">Please look at this photo from my glasses</string>
+    <string name="openclaw_chat_snap">Snap &amp; Send</string>
+    <string name="openclaw_chat_sending">Sending...</string>
+    <string name="openclaw_chat_noframe">Cannot get glasses frame, please check connection</string>
+    <string name="openclaw_chat_noapikey">Please configure Alibaba API Key in Settings first</string>
+    <string name="openclaw_chat_sendvoice">Send</string>
+    <string name="openclaw_chat_text">Text</string>
+    <string name="openclaw_chat_listening">Listening...</string>
+    <string name="openclaw_chat_mic">Voice</string>
+    <string name="openclaw_chat_stop">Stop</string>
+    <string name="openclaw_chat_asr_failed">Speech recognition failed: %1$s</string>
+    <!-- Localized replacements for FunASRService's wire-level English error texts -->
+    <string name="openclaw_asr_error_mic">Microphone unavailable</string>
+    <string name="openclaw_asr_error_connection">Connection failed</string>
+    <string name="openclaw_asr_error_task">Speech recognition service error</string>
+    <string name="openclaw_error_max_retries">Connection failed after %1$d retries</string>
+    <string name="openclaw_error_transport">Connection error: %1$s</string>
+    <string name="openclaw_error_invalid_url">Invalid gateway address</string>
+    <string name="audio_source_phone">Phone mic</string>
+    <string name="audio_source_glasses">Glasses mic</string>
+    <string name="done">Done</string>
 </resources>

@@ -37,6 +37,8 @@ sealed class Screen(val route: String) {
     object QuickVisionMode : Screen("quick_vision_mode")
     object LiveAIMode : Screen("live_ai_mode")
     object MockDeviceKit : Screen("mock_device_kit")
+    object OpenClaw : Screen("openclaw")
+    object OpenClawSettings : Screen("openclaw_settings")
 }
 
 sealed class BottomNavItem(
@@ -131,6 +133,9 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToRTMPStream = {
                         navController.navigate(Screen.RTMPStream.route)
+                    },
+                    onNavigateToOpenClaw = {
+                        navController.navigate(Screen.OpenClaw.route)
                     }
                 )
             }
@@ -196,6 +201,9 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToMockDeviceKit = {
                         navController.navigate(Screen.MockDeviceKit.route)
+                    },
+                    onNavigateToOpenClawSettings = {
+                        navController.navigate(Screen.OpenClawSettings.route)
                     }
                 )
             }
@@ -251,6 +259,25 @@ fun TurboMetaNavigation(
 
             composable(Screen.MockDeviceKit.route) {
                 MockDeviceKitEntry.Screen(
+                    onBackClick = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            composable(Screen.OpenClaw.route) {
+                OpenClawChatScreen(
+                    onBackClick = {
+                        navController.popBackStack()
+                    },
+                    onOpenSettings = {
+                        navController.navigate(Screen.OpenClawSettings.route)
+                    }
+                )
+            }
+
+            composable(Screen.OpenClawSettings.route) {
+                OpenClawSettingsScreen(
                     onBackClick = {
                         navController.popBackStack()
                     }

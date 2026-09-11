@@ -17,6 +17,8 @@ val LeanEatColorLight = Color(0xFFFF8E8E)
 val WordLearnColor = Color(0xFFFFA07A)
 val LiveStreamColor = Color(0xFFF38181)
 val QuickVisionColor = Color(0xFF9B59B6) // Purple for Quick Vision
+val OpenClawColor = Color(0xFF7E57C2) // purple → indigo gradient like the iOS card
+val OpenClawColorEnd = Color(0xFF3F51B5)
 
 // Nutrition Colors
 val NutritionProtein = Color(0xFF4CAF50)

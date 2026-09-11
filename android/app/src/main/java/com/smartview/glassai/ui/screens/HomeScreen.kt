@@ -15,7 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,6 +38,8 @@ import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.smartview.glassai.R
+import com.smartview.glassai.services.openclaw.OpenClawConnectionState
+import com.smartview.glassai.services.openclaw.OpenClawNodeService
 import com.smartview.glassai.ui.theme.*
 import com.smartview.glassai.utils.APIKeyManager
 import com.smartview.glassai.viewmodels.WearablesViewModel
@@ -52,7 +54,8 @@ fun HomeScreen(
     onNavigateToVision: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToLiveStream: () -> Unit = {},
-    onNavigateToRTMPStream: () -> Unit = {}
+    onNavigateToRTMPStream: () -> Unit = {},
+    onNavigateToOpenClaw: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -62,6 +65,18 @@ fun HomeScreen(
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
     val isFirmwareUpdateRequired by wearablesViewModel.isFirmwareUpdateRequired.collectAsState()
     val isDatAppUpdateRequired by wearablesViewModel.isDatAppUpdateRequired.collectAsState()
+
+    // OpenClaw: card subtitle shows the live state; auto-connect once a token is stored
+    // (iOS TurboMetaHomeView.onAppear semantics; there is no openclaw_enabled flag).
+    val openClawService = remember { OpenClawNodeService.getInstance(context) }
+    val openClawState by openClawService.connectionState.collectAsState()
+    LaunchedEffect(Unit) {
+        if (openClawService.connectionState.value == OpenClawConnectionState.Disconnected &&
+            !openClawService.loadGatewayToken().isNullOrBlank()
+        ) {
+            openClawService.connect()
+        }
+    }
 
     val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
     val errorToastContext = LocalContext.current
@@ -350,7 +365,7 @@ fun HomeScreen(
                     )
                 }
 
-                // Row 2: LeanEat + WordLearn
+                // Row 2: LeanEat + OpenClaw
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(AppSpacing.medium)
@@ -366,12 +381,14 @@ fun HomeScreen(
 
                     FeatureCard(
                         modifier = Modifier.weight(1f),
-                        title = stringResource(R.string.feature_wordlearn_title),
-                        subtitle = stringResource(R.string.feature_wordlearn_subtitle),
-                        icon = Icons.AutoMirrored.Filled.MenuBook,
-                        gradientColors = listOf(WordLearnColor, WordLearnColor.copy(alpha = 0.7f)),
-                        isPlaceholder = true,
-                        onClick = {}
+                        title = stringResource(R.string.feature_openclaw_title),
+                        subtitle = if (openClawState == OpenClawConnectionState.Connected)
+                            stringResource(R.string.feature_openclaw_connected)
+                        else
+                            stringResource(R.string.feature_openclaw_subtitle),
+                        icon = Icons.Default.Link,
+                        gradientColors = listOf(OpenClawColor, OpenClawColorEnd),
+                        onClick = onNavigateToOpenClaw
                     )
                 }
 
