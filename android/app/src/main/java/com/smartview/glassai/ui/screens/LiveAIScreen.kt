@@ -79,14 +79,6 @@ fun LiveAIScreen(
     val streamState by wearablesViewModel.streamState.collectAsState()
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
 
-    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
-    val errorToastContext = LocalContext.current
-    LaunchedEffect(wearablesErrorMessage) {
-        val message = wearablesErrorMessage ?: return@LaunchedEffect
-        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
-        wearablesViewModel.clearError()
-    }
-
     val listState = rememberLazyListState()
 
     // Phone microphone permission is requested here, in context, instead of at app launch (spec §5.3)

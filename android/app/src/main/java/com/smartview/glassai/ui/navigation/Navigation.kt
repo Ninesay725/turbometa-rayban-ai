@@ -19,6 +19,7 @@ import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.smartview.glassai.R
 import com.smartview.glassai.debug.MockDeviceKitEntry
+import com.smartview.glassai.ui.components.WearablesErrorToast
 import com.smartview.glassai.ui.screens.*
 import com.smartview.glassai.ui.theme.Primary
 import com.smartview.glassai.viewmodels.WearablesViewModel
@@ -107,6 +108,9 @@ fun TurboMetaNavigation(
             }
         }
     ) { paddingValues ->
+        // One toast for every glasses error, regardless of the screen (Phase B Task 8).
+        WearablesErrorToast(wearablesViewModel)
+
         NavHost(
             navController = navController,
             startDestination = Screen.Home.route,

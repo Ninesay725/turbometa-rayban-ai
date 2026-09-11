@@ -77,14 +77,6 @@ fun HomeScreen(
         }
     }
 
-    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
-    val errorToastContext = LocalContext.current
-    LaunchedEffect(wearablesErrorMessage) {
-        val message = wearablesErrorMessage ?: return@LaunchedEffect
-        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
-        wearablesViewModel.clearError()
-    }
-
     // Registration / update flows need a real Activity (LocalActivity: activity-compose >= 1.10)
     val activity = LocalActivity.current
     val activityUnavailableText = stringResource(R.string.error_activity_unavailable)

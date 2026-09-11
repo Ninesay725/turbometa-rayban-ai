@@ -7,7 +7,7 @@
 **🌏 World's First Full-Chinese AI Multimodal RayBan Meta Assistant**
 
 [![iOS](https://img.shields.io/badge/iOS-17.0%2B-blue.svg)](https://www.apple.com/ios/)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-green.svg)](https://www.android.com/)
+[![Android](https://img.shields.io/badge/Android-12%2B-green.svg)](https://www.android.com/)
 [![Swift](https://img.shields.io/badge/Swift-5.0-orange.svg)](https://swift.org)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-purple.svg)](https://kotlinlang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -31,7 +31,7 @@
 
 **Voice chat, photo recognition, OpenClaw AI assistant — your glasses, connected to everything!**
 
-✅ **iOS v2.0.0** | 📱 **Android v1.5.0**
+✅ **iOS v2.0.0** | ✅ **Android v2.0.0**
 
 ☕ **Enjoying this project?** [**Buy me a coffee**](https://buymeacoffee.com/turbo1123) to support development!
 
@@ -168,7 +168,7 @@ Before using TurboMeta, you **MUST** enable DAT SDK Preview Mode in Meta View Ap
 
 ### 📱 Android
 
-> ⚠️ Android is currently at v1.5.0 and does not yet include v2.0 features (OpenClaw, Meta Ray-Ban Display).
+> ✅ Android 2.0.0 includes the OpenClaw integration (node mode), DAT SDK 0.9.0 and Meta Ray-Ban Display glasses camera support. Setup: [`android/README.md`](android/README.md#-openclaw-integration--openclaw-集成).
 
 👉 [**Download APK**](https://github.com/Turbo1123/turbometa-rayban-ai/releases)
 
@@ -235,9 +235,9 @@ This is the world's first **fully Chinese-enabled** RayBan Meta AI assistant, br
 - **Audio**: AVAudioEngine + AVAudioPlayerNode
 
 ### Android
-- **Platform**: Android 8.0+ (API 26)
-- **Language**: Kotlin 1.9 + Jetpack Compose
-- **SDK**: Meta Wearables DAT SDK v0.4.0
+- **Platform**: Android 12+ (API 31)
+- **Language**: Kotlin 2.2 + Jetpack Compose
+- **SDK**: Meta Wearables DAT SDK v0.9.0 (Meta AI app V282+, glasses firmware V126+ / Display V125+)
 - **Architecture**: MVVM + StateFlow
 - **UI**: Material 3 Design
 

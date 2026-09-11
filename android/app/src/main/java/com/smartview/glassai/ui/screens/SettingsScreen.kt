@@ -450,8 +450,17 @@ fun SettingsScreen(
             SettingsSection(title = stringResource(R.string.about)) {
                 SettingsItem(
                     icon = Icons.Default.Info,
-                    title = stringResource(R.string.version),
-                    subtitle = "1.5.0",
+                    title = stringResource(R.string.settings_version),
+                    subtitle = BuildConfig.VERSION_NAME,
+                    onClick = {}
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(horizontal = AppSpacing.medium))
+
+                SettingsItem(
+                    icon = Icons.Default.Memory,
+                    title = stringResource(R.string.settings_sdk_version),
+                    subtitle = "Meta Wearables DAT ${BuildConfig.MWDAT_VERSION}",
                     onClick = {}
                 )
 

@@ -33,7 +33,7 @@
 
 **语音对话、拍照识别、OpenClaw AI 助手 - 你的眼镜，连接一切！**
 
-✅ **iOS v2.0.0** | 📱 **Android v1.5.0**
+✅ **iOS v2.0.0** | ✅ **Android v2.0.0**
 
 ☕ **喜欢这个项目？** [**请我喝杯咖啡**](#-请我喝杯咖啡) 支持开发！
 
@@ -171,7 +171,7 @@
 
 ### 📱 Android
 
-> ⚠️ Android 版本目前停留在 v1.5.0，暂未包含 v2.0 的 OpenClaw 集成和 Meta Ray-Ban Display 支持。
+> ✅ Android 2.0.0 已包含 OpenClaw 集成（节点模式）、DAT SDK 0.9.0 与 Meta Ray-Ban Display 眼镜相机支持。配置步骤见 [`android/README.md`](android/README.md#-openclaw-integration--openclaw-集成)。
 
 👉 [**前往下载 APK**](https://github.com/Turbo1123/turbometa-rayban-ai/releases)
 
@@ -299,9 +299,9 @@ TurboMeta 是专为 RayBan Meta 智能眼镜打造的全模态AI助手，集成�
 - **音频**：AVAudioEngine + AVAudioPlayerNode
 
 ### Android
-- **平台**：Android 8.0+ (API 26)
-- **语言**：Kotlin 1.9 + Jetpack Compose
-- **SDK**：Meta Wearables DAT SDK v0.4.0
+- **平台**：Android 12+ (API 31)
+- **语言**：Kotlin 2.2 + Jetpack Compose
+- **SDK**：Meta Wearables DAT SDK v0.9.0（需要 Meta AI 应用 V282+、眼镜固件 V126+ / Display V125+）
 - **架构**：MVVM + StateFlow
 - **UI**：Material 3 Design
 

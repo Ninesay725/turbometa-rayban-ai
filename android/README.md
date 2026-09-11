@@ -1,6 +1,6 @@
 # TurboMeta Ray-Ban AI - Android
 
-**Version 1.4.0**
+**Version 2.0.0** — Meta Wearables DAT SDK 0.9.0
 
 Ray-Ban Meta 智能眼镜 AI 助手 Android 版本。
 
@@ -41,6 +41,49 @@ Ray-Ban Meta 智能眼镜 AI 助手 Android 版本。
 - H.264 硬件编码，流畅推流
 - 可调节码率（1-4 Mbps）
 - 手机实时预览
+
+---
+
+### 🔗 OpenClaw Integration | OpenClaw 集成
+
+Chat with your self-hosted [OpenClaw](https://openclaw.ai) assistant from the glasses: text, voice (Alibaba Fun-ASR) and
+**Snap & Send**; in *node mode* the AI can call `camera.snap`, `camera.list`, `device.status`, `device.info` on its own.
+The app must be in the foreground for `camera.snap` (the DAT SDK cannot stream from the background).
+
+从眼镜与自建 [OpenClaw](https://openclaw.ai) 助手对话：文字、语音（阿里云 Fun-ASR）和**拍照发送**；节点模式下 AI 可主动调用
+`camera.snap`、`camera.list`、`device.status`、`device.info`。`camera.snap` 需要 App 在前台。
+
+**Gateway setup | Gateway 配置** (`~/.openclaw/openclaw.json` on the machine running `openclaw gateway`):
+
+```json
+{
+  "gateway": {
+    "bind": "lan",
+    "nodes": {
+      "allowCommands": ["camera.snap", "camera.list", "device.status", "device.info"]
+    }
+  }
+}
+```
+
+1. Restart the gateway, then in the app open **Settings → Integrations → OpenClaw** (or the gear on the chat screen).
+2. Enter the gateway **Host** (LAN IP) and **Port** (default `18789`), choose `ws://` (LAN) or `wss://` (behind TLS), and paste the
+   **Gateway Token** from the OpenClaw dashboard URL. Tap **Connect to Gateway**.
+3. First connection shows **Waiting for pairing**: on the gateway machine run `openclaw devices list` then
+   `openclaw devices approve <device-id>` (the device id is the Ed25519 identity the app generated once). The app reconnects automatically.
+4. Away from home: run [Tailscale](https://tailscale.com) on both machines and use the tailnet IP as the host.
+5. Voice input needs an Alibaba DashScope API key (Settings → API Key); the phone/glasses microphone toggle works like Live AI.
+6. Voice input follows the Alibaba region setting. `fun-asr-realtime` is confirmed on the Beijing endpoint; on the **Singapore** (intl) endpoint its availability has not been verified — if the mic reports "Speech recognition failed", switch the Alibaba endpoint to Beijing.
+7. `camera.snap` needs a frame from the glasses. While Live AI / Live Stream / RTMP are running it returns the live frame; while nobody streams it borrows the camera briefly. During a wake-word Quick Vision capture (a few seconds) the camera is busy and the command answers `NO_FRAME` — the AI simply retries.
+
+1. 重启 Gateway，然后在 App 打开 **设置 → 集成 → OpenClaw**（或聊天页右上角齿轮）。
+2. 填写 Gateway **地址**（局域网 IP）与**端口**（默认 `18789`），选择 `ws://`（局域网）或 `wss://`（TLS 反代），粘贴 OpenClaw 仪表盘 URL 中的
+   **Gateway 令牌**，点击 **连接 Gateway**。
+3. 首次连接显示**等待配对**：在 Gateway 机器上执行 `openclaw devices list`，再 `openclaw devices approve <device-id>`。App 会自动重连。
+4. 外网访问：两端安装 [Tailscale](https://tailscale.com)，地址填 tailnet IP。
+5. 语音输入需要阿里云 DashScope API Key（设置 → API Key）；手机 / 眼镜麦克风切换与 Live AI 一致。
+6. 语音识别跟随阿里云地域设置。`fun-asr-realtime` 已确认在北京节点可用；**新加坡**（intl）节点尚未验证——若麦克风提示「语音识别失败」，请把阿里云节点切回北京。
+7. `camera.snap` 需要眼镜画面：Live AI / 直播 / RTMP 运行时返回实时画面；无人使用相机时会短暂借用相机；唤醒词 Quick Vision 拍照的几秒内相机被占用，命令返回 `NO_FRAME`，AI 重试即可。
 
 ---
 
@@ -88,6 +131,13 @@ The wake word detection feature ("Jarvis") uses **Picovoice Porcupine**. To use 
 ---
 
 ## Release Notes | 更新日志
+
+### v2.0.0 (2026-09-10)
+
+- **OpenClaw integration** (node mode, Ed25519 device identity, Fun-ASR voice, Snap & Send) | **OpenClaw 集成**
+- **DAT SDK 0.9.0** with a shared glasses session; Meta Ray-Ban Display glasses work as camera devices | **DAT SDK 0.9.0**，共享眼镜会话
+- Stability: RTMP error reporting, first-frame timeout, encrypted stream key, WebSocket cleanup, capture budget | 稳定性修复
+- Settings → About shows the SDK version; minimum Android 12 | 设置页显示 SDK 版本；最低 Android 12
 
 ### v1.4.0 (2024-12-31)
 
@@ -195,10 +245,14 @@ The wake word detection feature ("Jarvis") uses **Picovoice Porcupine**. To use 
 
 ## Requirements | 要求
 
-- Android 8.0 (API 26) or higher
-- Ray-Ban Meta glasses paired via Meta View app
-- Android 8.0 (API 26) 或更高版本
-- 通过 Meta View 应用配对的 Ray-Ban Meta 眼镜
+- Android 12 (API 31) or higher
+- Meta AI app **V282+**, Ray-Ban Meta firmware **V126+** (Meta Ray-Ban Display firmware **V125+**)
+- The **DAT Wearables App** installed on the glasses (Meta AI app → Developer Mode) — required by DAT SDK 0.9.0
+- Ray-Ban Meta / Meta Ray-Ban Display glasses paired via the Meta AI app
+- Android 12（API 31）或更高版本
+- Meta AI 应用 **V282+**，Ray-Ban Meta 固件 **V126+**（Meta Ray-Ban Display 固件 **V125+**）
+- 眼镜上已安装 **DAT Wearables App**（Meta AI 应用 → 开发者模式）——DAT SDK 0.9.0 要求
+- 通过 Meta AI 应用配对的 Ray-Ban Meta / Meta Ray-Ban Display 眼镜
 
 ---
 

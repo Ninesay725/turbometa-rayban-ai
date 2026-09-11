@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
-import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -68,21 +67,6 @@ fun QuickVisionScreen(
     val currentFrame by wearablesViewModel.currentFrame.collectAsState()
     val capturedPhoto by wearablesViewModel.capturedPhoto.collectAsState()
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
-
-    val wearablesErrorMessage by wearablesViewModel.errorMessage.collectAsState()
-    val errorToastContext = LocalContext.current
-    // clearError() below runs within ~one Compose frame of the message appearing, long before the
-    // 100 ms polling loop in performQuickVision() wakes up, so that loop can never read the
-    // ViewModel's errorMessage itself. Snapshot it here first and let the failure branch fall back
-    // to the snapshot, so the inline card keeps the specific localized reason instead of the
-    // generic stream_failed text.
-    var lastGlassesError by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(wearablesErrorMessage) {
-        val message = wearablesErrorMessage ?: return@LaunchedEffect
-        lastGlassesError = message
-        Toast.makeText(errorToastContext, message, Toast.LENGTH_LONG).show()
-        wearablesViewModel.clearError()
-    }
 
     // Quick Vision state
     var isProcessing by remember { mutableStateOf(false) }
@@ -173,7 +157,6 @@ fun QuickVisionScreen(
 
         isProcessing = true
         errorMessage = null
-        lastGlassesError = null
         analysisResult = null
         photoForAnalysis = null
 
@@ -206,7 +189,8 @@ fun QuickVisionScreen(
 
             if (streamState !is WearablesViewModel.StreamState.Streaming) {
                 Log.e(TAG, "❌ Failed to start stream")
-                errorMessage = lastGlassesError ?: streamFailedText
+                // The specific DAT reason lives in StreamState.Error (state), not in the one-shot toast
+                errorMessage = (streamState as? WearablesViewModel.StreamState.Error)?.message ?: streamFailedText
                 speak(streamFailedText)
                 isProcessing = false
                 return
