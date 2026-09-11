@@ -2,6 +2,7 @@ package com.smartview.glassai.utils
 
 import android.content.Context
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.smartview.glassai.managers.AlibabaEndpoint
@@ -32,6 +33,10 @@ class APIKeyManager(context: Context) {
         private const val KEY_OUTPUT_LANGUAGE = "output_language"
         private const val KEY_VIDEO_QUALITY = "video_quality"
         private const val KEY_RTMP_URL = "rtmp_url"
+        private const val KEY_RTMP_STREAM_KEY = "rtmp_stream_key"
+        private const val KEY_RTMP_BITRATE = "rtmp_bitrate"
+        private const val KEY_RTMP_SPLIT_MIGRATED = "rtmp_split_migrated_v2"
+        const val DEFAULT_RTMP_BITRATE = 2_000_000
 
         // OpenClaw (Phase B). Non-secret settings live next to rtmp_url; the token and the
         // Ed25519 seed need the encrypted store (Android Keystore has no Ed25519).
@@ -65,6 +70,7 @@ class APIKeyManager(context: Context) {
 
     init {
         migrateLegacyKey()
+        migrateRtmpUrl()
     }
 
     // MARK: - Migration
@@ -83,6 +89,37 @@ class APIKeyManager(context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Migration error: ${e.message}")
         }
+    }
+
+    /**
+     * 2.0.0: the single rtmp_url used to embed the stream key. Split it once into rtmp_url
+     * (server) + rtmp_stream_key so the key is never rendered on screen.
+     */
+    private fun migrateRtmpUrl() {
+        try {
+            if (sharedPreferences.getBoolean(KEY_RTMP_SPLIT_MIGRATED, false)) return
+            val full = sharedPreferences.getString(KEY_RTMP_URL, null)
+            val editor = sharedPreferences.edit().putBoolean(KEY_RTMP_SPLIT_MIGRATED, true)
+            if (!full.isNullOrBlank() && sharedPreferences.getString(KEY_RTMP_STREAM_KEY, null).isNullOrBlank()) {
+                val (server, key) = RtmpUrlSplitter.split(full)
+                editor.putString(KEY_RTMP_URL, server)
+                if (key.isNotEmpty()) editor.putString(KEY_RTMP_STREAM_KEY, key)
+                Log.i(TAG, "Migrated rtmp_url into server URL + stream key")
+            }
+            editor.apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "RTMP migration error: ${e.message}")
+        }
+    }
+
+    /**
+     * Instrumented-test hook (Task 9): forgets that the split ran and runs it again, so the
+     * 1.5.0 -> 2.0.0 upgrade path can be exercised on a device without reinstalling.
+     */
+    @VisibleForTesting
+    internal fun rerunRtmpMigrationForTests() {
+        sharedPreferences.edit().remove(KEY_RTMP_SPLIT_MIGRATED).apply()
+        migrateRtmpUrl()
     }
 
     // MARK: - Provider-specific API Key Management
@@ -229,6 +266,31 @@ class APIKeyManager(context: Context) {
 
     fun getRtmpUrl(): String? {
         return sharedPreferences.getString(KEY_RTMP_URL, null)
+    }
+
+    // RTMP stream key (secret; encrypted like API keys) and persisted bitrate
+    fun getRtmpStreamKey(): String? = try {
+        sharedPreferences.getString(KEY_RTMP_STREAM_KEY, null)?.takeIf { it.isNotBlank() }
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to read RTMP stream key: ${e.message}")
+        null
+    }
+
+    fun saveRtmpStreamKey(key: String) {
+        if (key.isBlank()) deleteRtmpStreamKey() else sharedPreferences.edit().putString(KEY_RTMP_STREAM_KEY, key.trim()).apply()
+    }
+
+    fun deleteRtmpStreamKey() {
+        sharedPreferences.edit().remove(KEY_RTMP_STREAM_KEY).apply()
+    }
+
+    fun getRtmpBitrate(): Int {
+        val value = sharedPreferences.getInt(KEY_RTMP_BITRATE, 0)
+        return if (value > 0) value else DEFAULT_RTMP_BITRATE
+    }
+
+    fun saveRtmpBitrate(bitrate: Int) {
+        sharedPreferences.edit().putInt(KEY_RTMP_BITRATE, bitrate).apply()
     }
 
     // MARK: - OpenClaw (Phase B)

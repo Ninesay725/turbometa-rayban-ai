@@ -512,4 +512,14 @@
     <string name="audio_source_phone">手机麦克风</string>
     <string name="audio_source_glasses">眼镜麦克风</string>
     <string name="done">完成</string>
+
+    <!-- Phase B Task 7: RTMP 设置对话框与错误 -->
+    <string name="rtmp_settings_title">RTMP 设置</string>
+    <string name="rtmp_server_url">服务器地址</string>
+    <string name="rtmp_stream_key">推流密钥</string>
+    <string name="rtmp_bitrate">码率</string>
+    <string name="rtmp_bitrate_note">提示：码率越高画质越好，但需要更多带宽</string>
+    <string name="rtmp_disconnected">与服务器断开连接</string>
+    <string name="rtmp_first_frame_timeout">10 秒内未收到眼镜画面</string>
+    <string name="rtmp_connect_failed">连接 RTMP 服务器失败</string>
 </resources>

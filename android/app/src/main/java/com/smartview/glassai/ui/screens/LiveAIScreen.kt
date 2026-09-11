@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -103,6 +105,13 @@ fun LiveAIScreen(
         if (!granted) {
             Toast.makeText(micContext, micDeniedText, Toast.LENGTH_LONG).show()
         }
+    }
+
+    // Users who deny the mic, then grant it in system Settings, come back through ON_RESUME:
+    // re-check so Live AI connects without leaving and re-entering the screen (ledger T7).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        micGranted = ContextCompat.checkSelfPermission(micContext, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
     }
 
     // Start the video stream right away; ask for the microphone if we do not have it yet.

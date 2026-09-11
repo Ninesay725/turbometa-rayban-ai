@@ -29,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,8 +49,8 @@ fun RTMPStreamingScreen(
     val rtmpUrl by viewModel.rtmpUrl.collectAsState()
     val previewFrame by viewModel.previewFrame.collectAsState()
     val streamStats by viewModel.streamStats.collectAsState()
-    val cameraState by viewModel.cameraState.collectAsState()
     val bitrate by viewModel.bitrate.collectAsState()
+    val streamKey by viewModel.streamKey.collectAsState()
 
     // UI visibility toggle
     var showUI by remember { mutableStateOf(true) }
@@ -239,7 +240,7 @@ fun RTMPStreamingScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "Error",
+                                text = stringResource(R.string.error),
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -254,7 +255,7 @@ fun RTMPStreamingScreen(
                             TextButton(
                                 onClick = { viewModel.clearError() }
                             ) {
-                                Text("Dismiss", color = Color.White)
+                                Text(stringResource(R.string.close), color = Color.White)
                             }
                         }
                     }
@@ -319,9 +320,13 @@ fun RTMPStreamingScreen(
     if (showSettingsDialog) {
         RTMPSettingsDialog(
             currentUrl = rtmpUrl,
+            currentKey = streamKey,
             currentBitrate = bitrate,
-            onUrlChange = { viewModel.updateRtmpUrl(it) },
-            onBitrateChange = { viewModel.updateBitrate(it) },
+            onSave = { url, key, newBitrate ->
+                viewModel.updateRtmpUrl(url)
+                viewModel.updateStreamKey(key)
+                viewModel.updateBitrate(newBitrate)
+            },
             onDismiss = { showSettingsDialog = false }
         )
     }
@@ -330,46 +335,54 @@ fun RTMPStreamingScreen(
 @Composable
 private fun RTMPSettingsDialog(
     currentUrl: String,
+    currentKey: String,
     currentBitrate: Int,
-    onUrlChange: (String) -> Unit,
-    onBitrateChange: (Int) -> Unit,
+    onSave: (url: String, key: String, bitrate: Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     var urlText by remember { mutableStateOf(currentUrl) }
+    var keyText by remember { mutableStateOf(currentKey) }
     var selectedBitrate by remember { mutableStateOf(currentBitrate) }
 
     val bitrateOptions = listOf(
-        500_000 to "500 kbps (Low)",
+        500_000 to "500 kbps",
         1_000_000 to "1 Mbps",
-        2_000_000 to "2 Mbps (Recommended)",
-        4_000_000 to "4 Mbps (High)",
-        6_000_000 to "6 Mbps (Very High)"
+        2_000_000 to "2 Mbps",
+        4_000_000 to "4 Mbps",
+        6_000_000 to "6 Mbps"
     )
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text("RTMP Settings")
-        },
+        title = { Text(stringResource(R.string.rtmp_settings_title)) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(AppSpacing.medium)
             ) {
-                // RTMP URL
                 OutlinedTextField(
                     value = urlText,
                     onValueChange = { urlText = it },
-                    label = { Text("RTMP URL") },
-                    placeholder = { Text("rtmp://server.com/live/key") },
+                    label = { Text(stringResource(R.string.rtmp_server_url)) },
+                    placeholder = { Text("rtmp://server.com/live") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
                 )
 
-                // Bitrate selection
+                // The key is a secret: password transform, stored encrypted, never rendered elsewhere
+                OutlinedTextField(
+                    value = keyText,
+                    onValueChange = { keyText = it },
+                    label = { Text(stringResource(R.string.rtmp_stream_key)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                )
+
                 Text(
-                    text = "Bitrate",
+                    text = stringResource(R.string.rtmp_bitrate),
                     style = MaterialTheme.typography.labelMedium
                 )
 
@@ -396,9 +409,8 @@ private fun RTMPSettingsDialog(
                     }
                 }
 
-                // Info text
                 Text(
-                    text = "Note: Higher bitrate = better quality but requires more bandwidth",
+                    text = stringResource(R.string.rtmp_bitrate_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -407,17 +419,16 @@ private fun RTMPSettingsDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onUrlChange(urlText)
-                    onBitrateChange(selectedBitrate)
+                    onSave(urlText, keyText, selectedBitrate)
                     onDismiss()
                 }
             ) {
-                Text("Save")
+                Text(stringResource(R.string.save))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.cancel))
             }
         }
     )

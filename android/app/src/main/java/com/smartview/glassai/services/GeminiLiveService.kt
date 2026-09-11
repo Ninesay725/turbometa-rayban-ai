@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import okhttp3.*
 import java.io.ByteArrayOutputStream
-import java.util.concurrent.TimeUnit
 
 /**
  * Gemini Live WebSocket Service
@@ -99,10 +98,10 @@ class GeminiLiveService(
         }
     }
 
-    private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(30, TimeUnit.SECONDS)
-        .build()
+    // One process-wide client (iOS 2.0 fix 4.1); it already pings every 30 s, so the per-instance
+    // pingInterval builder goes away with it.
+    private val client: OkHttpClient
+        get() = HttpClients.websocket
 
     fun connect() {
         if (_isConnected.value) return
@@ -122,44 +121,58 @@ class GeminiLiveService(
             .url(url)
             .build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connected")
-                _isConnected.value = true
-                configureSession()
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                handleServerEvent(text)
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket error: ${t.message}")
-                _isConnected.value = false
-                _errorMessage.value = t.message
-                onError?.invoke(t.message ?: "Connection failed")
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closed: $reason")
-                _isConnected.value = false
-                isSessionConfigured = false
-            }
-        })
+        webSocket = client.newWebSocket(request, SocketListener(this))
     }
 
     fun disconnect() {
         Log.d(TAG, "Disconnecting from Gemini Live")
         stopRecording()
         stopAudioPlayback()
-        webSocket?.close(1000, "User disconnected")
+        val socket = webSocket
         webSocket = null
+        // close() starts the handshake; cancel() releases the connection even if the server never
+        // answers (the old code could keep a half-closed socket + reader thread alive).
+        runCatching { socket?.close(1000, "User disconnected") }
+        runCatching { socket?.cancel() }
         _isConnected.value = false
         _isRecording.value = false
         _isSpeaking.value = false
         isSessionConfigured = false
+        pendingImageFrame = null
+        synchronized(audioQueue) { audioQueue.clear() }
         bluetoothAudioManager?.cleanup()
         scope.cancel()
+    }
+
+    internal fun onSocketOpen() {
+        Log.d(TAG, "WebSocket connected")
+        _isConnected.value = true
+        configureSession()
+    }
+
+    internal fun onSocketFailure(t: Throwable) {
+        Log.e(TAG, "WebSocket error: ${t.message}")
+        _isConnected.value = false
+        _errorMessage.value = t.message
+        onError?.invoke(t.message ?: "Connection failed")
+    }
+
+    internal fun onSocketClosed(reason: String) {
+        Log.d(TAG, "WebSocket closed: $reason")
+        _isConnected.value = false
+        isSessionConfigured = false
+    }
+
+    /**
+     * Holds the service weakly (iOS 2.0 fix 4.2): a socket that outlives disconnect() must not
+     * keep the service — and through its callbacks the ViewModel — alive.
+     */
+    private class SocketListener(service: GeminiLiveService) : WebSocketListener() {
+        private val ref = java.lang.ref.WeakReference(service)
+        override fun onOpen(webSocket: WebSocket, response: Response) { ref.get()?.onSocketOpen() }
+        override fun onMessage(webSocket: WebSocket, text: String) { ref.get()?.handleServerEvent(text) }
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { ref.get()?.onSocketFailure(t) }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { ref.get()?.onSocketClosed(reason) }
     }
 
     /**
@@ -398,7 +411,7 @@ class GeminiLiveService(
 
     // MARK: - Handle Server Events
 
-    private fun handleServerEvent(text: String) {
+    internal fun handleServerEvent(text: String) {
         try {
             val json = gson.fromJson(text, JsonObject::class.java)
 

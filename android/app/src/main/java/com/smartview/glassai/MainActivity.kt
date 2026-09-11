@@ -34,8 +34,7 @@ class MainActivity : AppCompatActivity() {
         // RECORD_AUDIO is NOT here any more: Live AI and the wake word request it when needed.
         val PERMISSIONS: Array<String> = arrayOf(
             Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.INTERNET
+            Manifest.permission.BLUETOOTH_CONNECT
         )
 
         // Requested at launch on API 33+ so the foreground-service notifications are visible,
@@ -52,7 +51,7 @@ class MainActivity : AppCompatActivity() {
 
     private var permissionContinuation: CancellableContinuation<PermissionStatus>? = null
     private val permissionMutex = Mutex()
-    private var sdkInitialized = false
+    private var monitoringStarted = false
 
     // Android permissions launcher - must be registered at creation time
     private val androidPermissionsLauncher = registerForActivityResult(
@@ -62,7 +61,7 @@ class MainActivity : AppCompatActivity() {
             permissionsResult[permission] ?: isGranted(permission)
         }
         if (requiredGranted) {
-            initializeSDK()
+            startWearablesMonitoring()
         } else {
             wearablesViewModel.setError(getString(R.string.permission_all_required))
         }
@@ -121,7 +120,7 @@ class MainActivity : AppCompatActivity() {
 
         if (PERMISSIONS.all { isGranted(it) }) {
             // Required permissions already granted: start monitoring now
-            initializeSDK()
+            startWearablesMonitoring()
         }
         if (missing.isNotEmpty()) {
             // Ask for whatever is missing (required and/or POST_NOTIFICATIONS)
@@ -129,9 +128,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun initializeSDK() {
-        if (sdkInitialized) return
-        sdkInitialized = true
+    private fun startWearablesMonitoring() {
+        if (monitoringStarted) return
+        monitoringStarted = true
 
         // Wearables.initialize() already ran in TurboMetaApplication.onCreate().
         // Start observing Wearables state once the Bluetooth runtime permissions are granted.

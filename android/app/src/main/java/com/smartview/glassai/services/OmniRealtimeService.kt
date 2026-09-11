@@ -22,7 +22,6 @@ import okhttp3.*
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.TimeUnit
 
 /**
  * Alibaba Qwen Omni Realtime Service
@@ -100,9 +99,9 @@ class OmniRealtimeService(
     private var lastImageSentTime = 0L
     private val imageSendIntervalMs = 500L  // 发送图片的间隔（毫秒）
 
-    private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .build()
+    // One process-wide client (iOS 2.0 fix 4.1): no per-instance Dispatcher/ConnectionPool leak.
+    private val client: OkHttpClient
+        get() = HttpClients.websocket
 
     fun connect() {
         if (_isConnected.value) return
@@ -120,41 +119,55 @@ class OmniRealtimeService(
             .addHeader("Authorization", "Bearer $apiKey")
             .build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connected")
-                _isConnected.value = true
-                sendSessionUpdate()
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                handleMessage(text)
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket error: ${t.message}")
-                _isConnected.value = false
-                _errorMessage.value = t.message
-                onError?.invoke(t.message ?: "Connection failed")
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closed: $reason")
-                _isConnected.value = false
-            }
-        })
+        webSocket = client.newWebSocket(request, SocketListener(this))
     }
 
     fun disconnect() {
         stopRecording()
         stopAudioPlayback()
-        webSocket?.close(1000, "User disconnected")
+        val socket = webSocket
         webSocket = null
+        // close() starts the handshake; cancel() releases the connection even if the server never
+        // answers (the old code could keep a half-closed socket + reader thread alive).
+        runCatching { socket?.close(1000, "User disconnected") }
+        runCatching { socket?.cancel() }
         _isConnected.value = false
         _isRecording.value = false
         _isSpeaking.value = false
+        pendingImageFrame = null
+        synchronized(audioQueue) { audioQueue.clear() }
         bluetoothAudioManager?.cleanup()
         scope.cancel()
+    }
+
+    internal fun onSocketOpen() {
+        Log.d(TAG, "WebSocket connected")
+        _isConnected.value = true
+        sendSessionUpdate()
+    }
+
+    internal fun onSocketFailure(t: Throwable) {
+        Log.e(TAG, "WebSocket error: ${t.message}")
+        _isConnected.value = false
+        _errorMessage.value = t.message
+        onError?.invoke(t.message ?: "Connection failed")
+    }
+
+    internal fun onSocketClosed(reason: String) {
+        Log.d(TAG, "WebSocket closed: $reason")
+        _isConnected.value = false
+    }
+
+    /**
+     * Holds the service weakly (iOS 2.0 fix 4.2): a socket that outlives disconnect() must not
+     * keep the service — and through its callbacks the ViewModel — alive.
+     */
+    private class SocketListener(service: OmniRealtimeService) : WebSocketListener() {
+        private val ref = java.lang.ref.WeakReference(service)
+        override fun onOpen(webSocket: WebSocket, response: Response) { ref.get()?.onSocketOpen() }
+        override fun onMessage(webSocket: WebSocket, text: String) { ref.get()?.handleMessage(text) }
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { ref.get()?.onSocketFailure(t) }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { ref.get()?.onSocketClosed(reason) }
     }
 
     /**
@@ -360,7 +373,7 @@ class OmniRealtimeService(
         }
     }
 
-    private fun handleMessage(text: String) {
+    internal fun handleMessage(text: String) {
         try {
             val json = gson.fromJson(text, JsonObject::class.java)
             val type = json.get("type")?.asString ?: return

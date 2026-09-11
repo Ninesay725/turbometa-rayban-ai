@@ -8,7 +8,6 @@ import androidx.lifecycle.viewModelScope
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
-import com.meta.wearable.dat.camera.types.VideoQuality
 import com.smartview.glassai.R
 import com.smartview.glassai.glasses.CameraError
 import com.smartview.glassai.glasses.CameraResult
@@ -19,8 +18,10 @@ import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.SessionStartResult
 import com.smartview.glassai.services.RTMPStreamingService
 import com.smartview.glassai.utils.APIKeyManager
+import com.smartview.glassai.utils.RtmpUrlSplitter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +33,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * RTMPStreamingViewModel - Manages RTMP streaming from glasses camera
  *
  * Borrows the camera from the shared GlassesSessionManager (DAT 0.9.0) and feeds raw I420 frames
- * to RTMPStreamingService for live broadcasting.
+ * to RTMPStreamingService for live broadcasting. 2.0: the server URL and the stream key are two
+ * persisted fields (the key is never rendered), the bitrate is persisted, and a first-frame
+ * timeout stops "Connecting" from lasting forever when the glasses never deliver video.
  */
 class RTMPStreamingViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -40,7 +43,8 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         private const val TAG = "RTMPStreamingVM"
         private const val OWNER = "RTMPStreamingViewModel"
         private const val SESSION_START_TIMEOUT_MS = 12_000L
-        const val DEFAULT_RTMP_URL = "rtmp://localhost/live/stream"
+        const val FIRST_FRAME_TIMEOUT_MS = 10_000L
+        const val DEFAULT_RTMP_URL = "rtmp://localhost/live"
     }
 
     // States
@@ -54,8 +58,12 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private val _uiState = MutableStateFlow<UIState>(UIState.Idle)
     val uiState: StateFlow<UIState> = _uiState.asStateFlow()
 
+    /** Server URL only (`rtmp://host/app`); the key is appended when connecting. */
     private val _rtmpUrl = MutableStateFlow(DEFAULT_RTMP_URL)
     val rtmpUrl: StateFlow<String> = _rtmpUrl.asStateFlow()
+
+    private val _streamKey = MutableStateFlow("")
+    val streamKey: StateFlow<String> = _streamKey.asStateFlow()
 
     private val _previewFrame = MutableStateFlow<Bitmap?>(null)
     val previewFrame: StateFlow<Bitmap?> = _previewFrame.asStateFlow()
@@ -66,11 +74,12 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private val _cameraState = MutableStateFlow<DatStreamState?>(null)
     val cameraState: StateFlow<DatStreamState?> = _cameraState.asStateFlow()
 
-    private val _bitrate = MutableStateFlow(2_000_000) // 2 Mbps default
+    private val _bitrate = MutableStateFlow(APIKeyManager.DEFAULT_RTMP_BITRATE)
     val bitrate: StateFlow<Int> = _bitrate.asStateFlow()
 
     // Services
     private val rtmpService = RTMPStreamingService(application)
+    private val apiKeyManager = APIKeyManager.getInstance(application)
     private val sessionManager: GlassesSessionManager by lazy {
         GlassesSessionManager.getInstance(application)
     }
@@ -90,6 +99,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private var stateJob: Job? = null
     private var streamErrorJob: Job? = null
     private var statsJob: Job? = null
+    private var firstFrameJob: Job? = null
 
     // Video parameters (set when stream starts).
     // @Volatile: written by the frame worker on frameDispatcher, read and reset on Main.
@@ -101,13 +111,9 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private var frameTimestampBase = 0L
 
     init {
-        // Load saved RTMP URL
-        val apiKeyManager = APIKeyManager.getInstance(application)
-        apiKeyManager.getRtmpUrl()?.let { savedUrl ->
-            if (savedUrl.isNotEmpty()) {
-                _rtmpUrl.value = savedUrl
-            }
-        }
+        apiKeyManager.getRtmpUrl()?.takeIf { it.isNotBlank() }?.let { _rtmpUrl.value = it }
+        apiKeyManager.getRtmpStreamKey()?.let { _streamKey.value = it }
+        _bitrate.value = apiKeyManager.getRtmpBitrate()
 
         // Observe RTMP service state
         viewModelScope.launch {
@@ -118,6 +124,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
                         // then calls stopStreaming(), so Idle follows an Error within milliseconds
                         // on the RTMP thread. startStreaming() moves the state on to Connecting and
                         // the Stop button calls clearError() first, so Error is still recoverable.
+                        // A user Stop therefore ends here: service Idle -> UI Idle, no card.
                         if (_uiState.value != UIState.Idle && _uiState.value !is UIState.Error) {
                             _uiState.value = UIState.Idle
                         }
@@ -126,13 +133,19 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
                         _uiState.value = UIState.Connecting
                     }
                     is RTMPStreamingService.StreamingState.Streaming -> {
+                        firstFrameJob?.cancel()
                         _uiState.value = UIState.Streaming
                     }
                     is RTMPStreamingService.StreamingState.Error -> {
                         _uiState.value = UIState.Error(state.message)
                     }
                     is RTMPStreamingService.StreamingState.Disconnected -> {
-                        _uiState.value = UIState.Error("Disconnected from server")
+                        // The service only emits this while isStreaming (an unexpected drop of a
+                        // live stream); the VM double-checks so a late callback after a user Stop
+                        // (already Idle) or after a failure (already Error) can never overwrite them.
+                        if (_uiState.value == UIState.Streaming) {
+                            _uiState.value = UIState.Error(getApplication<Application>().getString(R.string.rtmp_disconnected))
+                        }
                     }
                 }
             }
@@ -146,16 +159,27 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    /** Saves the server URL (without the key). */
     fun updateRtmpUrl(url: String) {
-        _rtmpUrl.value = url
-        // Save URL
-        val apiKeyManager = APIKeyManager.getInstance(getApplication())
-        apiKeyManager.saveRtmpUrl(url)
+        val trimmed = url.trim()
+        _rtmpUrl.value = trimmed
+        apiKeyManager.saveRtmpUrl(trimmed)
+    }
+
+    /** Saves the stream key into encrypted storage; blank deletes it. */
+    fun updateStreamKey(key: String) {
+        val trimmed = key.trim()
+        _streamKey.value = trimmed
+        apiKeyManager.saveRtmpStreamKey(trimmed)
     }
 
     fun updateBitrate(newBitrate: Int) {
         _bitrate.value = newBitrate
+        apiKeyManager.saveRtmpBitrate(newBitrate)
     }
+
+    /** The URL actually pushed to: server + "/" + key. Never log or render this. */
+    private fun fullRtmpUrl(): String = RtmpUrlSplitter.join(_rtmpUrl.value, _streamKey.value)
 
     /**
      * Start RTMP streaming
@@ -182,16 +206,8 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         camera = null
         sessionManager.stopCamera(OWNER)
 
-        // Get video quality setting
-        val apiKeyManager = APIKeyManager.getInstance(getApplication())
-        val savedQuality = apiKeyManager.getVideoQuality()
-        val videoQuality = when (savedQuality) {
-            "LOW" -> VideoQuality.LOW
-            "HIGH" -> VideoQuality.HIGH
-            else -> VideoQuality.MEDIUM
-        }
-
-        Log.d(TAG, "Starting camera stream with quality: $savedQuality")
+        val videoQuality = WearablesViewModel.videoQualityFromSetting(apiKeyManager.getVideoQuality())
+        Log.d(TAG, "Starting camera stream with quality: $videoQuality")
 
         startJob = viewModelScope.launch {
             sessionManager.acquire(OWNER)
@@ -229,6 +245,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
                         hasBeenActive = true
                         // Camera is ready, RTMP will connect after first frame arrives
                         Log.d(TAG, "Camera streaming, waiting for first frame...")
+                        armFirstFrameTimeout()
                     }
                     DatStreamState.STARTING,
                     DatStreamState.STARTED,
@@ -276,6 +293,23 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    /**
+     * The glasses report STREAMING but may never deliver a decodable frame (ledger T5: RTMP could
+     * stick in Connecting with no stream budget). Fail after FIRST_FRAME_TIMEOUT_MS unless a frame
+     * arrived (videoWidth != 0) or the RTMP service already moved on.
+     */
+    private fun armFirstFrameTimeout() {
+        firstFrameJob?.cancel()
+        firstFrameJob = viewModelScope.launch {
+            delay(FIRST_FRAME_TIMEOUT_MS)
+            if (videoWidth == 0 && _uiState.value == UIState.Connecting) {
+                Log.e(TAG, "no video frame within ${FIRST_FRAME_TIMEOUT_MS}ms")
+                rtmpService.stopStreaming()
+                failCamera(getApplication<Application>().getString(R.string.rtmp_first_frame_timeout))
+            }
+        }
+    }
+
     private fun failCamera(message: String) {
         Log.e(TAG, "Camera failure: $message")
         cancelCameraJobs()
@@ -292,7 +326,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private fun connectRtmp() {
         viewModelScope.launch {
             val success = rtmpService.startStreaming(
-                rtmpUrl = _rtmpUrl.value,
+                rtmpUrl = fullRtmpUrl(),
                 width = videoWidth,
                 height = videoHeight,
                 bitrate = _bitrate.value
@@ -300,7 +334,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
 
             if (!success) {
                 Log.e(TAG, "Failed to connect RTMP")
-                _uiState.value = UIState.Error("Failed to connect to RTMP server")
+                _uiState.value = UIState.Error(getApplication<Application>().getString(R.string.rtmp_connect_failed))
             }
         }
     }
@@ -308,7 +342,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private fun handleVideoFrame(videoFrame: VideoFrame) {
         // Copy the SDK buffer FIRST: VideoFrame.buffer is only guaranteed valid inside collect {}
         // (spec §5.8). Everything below works on our own copy.
-        val i420 = copyFrame(videoFrame) ?: return
+        val i420 = FrameConversions.copyI420(videoFrame) ?: return
         val width = videoFrame.width
         val height = videoFrame.height
 
@@ -317,6 +351,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
             // Use original dimensions - modern MediaCodec handles alignment internally
             videoWidth = width
             videoHeight = height
+            firstFrameJob?.cancel()
             Log.d(TAG, "Video dimensions: ${videoWidth}x${videoHeight}")
 
             // Now connect RTMP with proper dimensions
@@ -341,21 +376,10 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
             timestampUs = timestampUs
         )
 
-        // Also update preview (convert to bitmap for display) from the same copy
-        updatePreview(i420, width, height)
-    }
-
-    /** Defensive copy of the SDK frame; null if the buffer could not be read. */
-    private fun copyFrame(videoFrame: VideoFrame): ByteArray? = FrameConversions.copyI420(videoFrame)
-
-    /**
-     * Decodes the preview bitmap and, exactly like WearablesViewModel, publishes it to the shared
-     * manager under this owner id. Without this latestFrame stays null for the whole broadcast and
-     * an OpenClaw camera.snap would fall through to GlassesPhotoCapturer, which can only answer
-     * CameraBusy while this ViewModel holds the camera. Same accepted trade-off as Live AI: the
-     * published bitmap is the preview decode (JPEG quality 50), so such a snap is double-lossy.
-     */
-    private fun updatePreview(i420: ByteArray, width: Int, height: Int) {
+        // Also update preview (convert to bitmap for display) from the same copy, and publish it as
+        // the manager's latestFrame: RTMP is a long-lived camera owner, and an OpenClaw camera.snap
+        // during a broadcast must return the live frame instead of NO_FRAME (publishFrame is the
+        // documented off-main exception in GlassesSessionManager).
         val bitmap = FrameConversions.i420ToBitmap(i420, width, height, FrameConversions.PREVIEW_JPEG_QUALITY)
         if (bitmap != null) {
             _previewFrame.value = bitmap
@@ -372,6 +396,8 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         stateJob = null
         streamErrorJob?.cancel()
         streamErrorJob = null
+        firstFrameJob?.cancel()
+        firstFrameJob = null
     }
 
     /**

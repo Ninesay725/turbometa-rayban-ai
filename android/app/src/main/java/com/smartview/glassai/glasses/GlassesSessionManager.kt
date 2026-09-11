@@ -310,11 +310,16 @@ class GlassesSessionManager internal constructor(
         clearStopping(outgoing)
     }
 
-    private fun clearStopping(outgoing: GlassesSession) {
+    /**
+     * @param fromJob the stoppingJob itself when called from inside it; that job must finish on its
+     *   own instead of cancelling itself (Phase C adds work after this call).
+     */
+    private fun clearStopping(outgoing: GlassesSession, fromJob: Job? = null) {
         if (stoppingSession !== outgoing) return
         stoppingSession = null
-        stoppingJob?.cancel()
+        val job = stoppingJob
         stoppingJob = null
+        if (job != null && job !== fromJob) job.cancel()
         if (session == null) _sessionState.value = DeviceSessionState.STOPPED
     }
 
@@ -405,7 +410,7 @@ class GlassesSessionManager internal constructor(
         stoppingJob = scope.launch {
             current.state.first { it == DeviceSessionState.STOPPED }
             Log.d(TAG, "previous session reported STOPPED")
-            clearStopping(current)
+            clearStopping(current, fromJob = coroutineContext[Job])
         }
         current.stop()
     }

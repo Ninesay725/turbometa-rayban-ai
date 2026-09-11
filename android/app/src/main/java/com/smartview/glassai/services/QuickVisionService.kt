@@ -247,6 +247,11 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                         failAndFinish("error")
                         return@launch
                     }
+                    PhotoCaptureOutcome.Timeout -> {
+                        Log.e(TAG, "Capture exceeded its total budget")
+                        failAndFinish("error")
+                        return@launch
+                    }
                     PhotoCaptureOutcome.NoImage -> {
                         Log.e(TAG, "No image captured")
                         failAndFinish("no_image")

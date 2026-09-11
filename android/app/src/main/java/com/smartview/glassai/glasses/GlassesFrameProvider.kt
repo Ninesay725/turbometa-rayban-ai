@@ -195,6 +195,7 @@ class SessionFrameProvider(
             is PhotoCaptureOutcome.StreamStartFailed -> SnapshotResult.StreamFailed(outcome.error.description)
             PhotoCaptureOutcome.StreamTimeout -> SnapshotResult.StreamFailed("Stream did not start in time")
             PhotoCaptureOutcome.NoImage -> SnapshotResult.NoFrame
+            PhotoCaptureOutcome.Timeout -> SnapshotResult.StreamFailed("Capture timed out")
         }
     }
 

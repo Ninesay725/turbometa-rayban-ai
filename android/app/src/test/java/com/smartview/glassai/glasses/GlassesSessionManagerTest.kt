@@ -381,16 +381,18 @@ class GlassesSessionManagerTest {
     @Test
     fun awaitStartedResolvesTrueOnStartedAndFalseOnStopped() = runTest(UnconfinedTestDispatcher()) {
         val manager = newManager()
-        assertFalse(manager.awaitStarted(1_000)) // no session at all
-
         manager.acquire("A")
+        val started = async { manager.awaitStarted(1_000) }
         factory.last.emitStarted()
-        assertTrue(manager.awaitStarted(1_000))
+        assertTrue(started.await())
 
+        // A fresh session that the device stops before STARTED resolves false on the real STOPPED.
+        manager.release("A")
+        manager.acquire("B")
+        val stopped = async { manager.awaitStarted(1_000) }
         factory.last.emitStoppedByDevice()
-        manager.acquire("A")
-        factory.last.emitStoppedByDevice()
-        assertFalse(manager.awaitStarted(1_000))
+        assertFalse(stopped.await())
+        assertFalse(manager.hasSession)
     }
 
     @Test

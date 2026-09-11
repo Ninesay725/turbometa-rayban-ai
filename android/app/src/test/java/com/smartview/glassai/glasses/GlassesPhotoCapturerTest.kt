@@ -202,4 +202,26 @@ class GlassesPhotoCapturerTest {
         assertNull(manager.currentCameraOwner)
         assertEquals(0, manager.ownerCount)
     }
+
+    @Test
+    fun captureGivesUpAfterTheTotalBudgetAndReleasesEverything() = runTest(dispatcher) {
+        val manager = newManager()
+        observer.device.value = rayban
+        val capturer = GlassesPhotoCapturer(
+            sessionManager = manager,
+            owner = "QuickVisionService",
+            config = config,
+            decodePhoto = { "photo" },
+            decodeFrame = { "frame" },
+            frameDispatcher = dispatcher,
+            totalBudgetMs = 5_000L,
+        )
+        // The session never reaches STARTED: the per-step budget (12 s) is longer than the total.
+        val result = async { capturer.capture() }
+        advanceTimeBy(5_001)
+
+        assertEquals(PhotoCaptureOutcome.Timeout, result.await())
+        assertEquals(0, manager.ownerCount)
+        assertNull(manager.currentCameraOwner)
+    }
 }

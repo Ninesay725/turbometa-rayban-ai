@@ -33,6 +33,8 @@ sealed class PhotoCaptureOutcome<out T> {
     object StreamTimeout : PhotoCaptureOutcome<Nothing>()
     /** capturePhoto() failed and no decodable video frame arrived within the fallback budget. */
     object NoImage : PhotoCaptureOutcome<Nothing>()
+    /** The whole capture (device wait excluded) exceeded totalBudgetMs; everything was released. */
+    object Timeout : PhotoCaptureOutcome<Nothing>()
 }
 
 /**
@@ -57,6 +59,7 @@ class GlassesPhotoCapturer<T : Any>(
     private val sessionTimeoutMs: Long = DEFAULT_SESSION_TIMEOUT_MS,
     private val streamTimeoutMs: Long = DEFAULT_STREAM_TIMEOUT_MS,
     private val fallbackFrameTimeoutMs: Long = DEFAULT_FALLBACK_FRAME_TIMEOUT_MS,
+    private val totalBudgetMs: Long = DEFAULT_TOTAL_BUDGET_MS,
 ) {
     companion object {
         private const val TAG = "GlassesPhotoCapturer"
@@ -67,6 +70,13 @@ class GlassesPhotoCapturer<T : Any>(
         const val DEFAULT_SESSION_TIMEOUT_MS = 12_000L
         const val DEFAULT_STREAM_TIMEOUT_MS = 12_000L
         const val DEFAULT_FALLBACK_FRAME_TIMEOUT_MS = 2_000L
+
+        /**
+         * Upper bound for ensureSessionStarted + addCamera + stream + capture together (ledger T5:
+         * the per-step budgets summed to ~36 s worst case; the wake-word user should hear a failure
+         * within ~15 s).
+         */
+        const val DEFAULT_TOTAL_BUDGET_MS = 15_000L
 
         /** ensureSessionStarted + addCamera attempts; see [borrowCameraAndCapture]. */
         private const val BORROW_ATTEMPTS = 2
@@ -84,7 +94,8 @@ class GlassesPhotoCapturer<T : Any>(
         }
         sessionManager.acquire(owner)
         try {
-            return borrowCameraAndCapture()
+            return withTimeoutOrNull(totalBudgetMs) { borrowCameraAndCapture() }
+                ?: PhotoCaptureOutcome.Timeout.also { Log.e(TAG, "capture exceeded ${totalBudgetMs}ms") }
         } finally {
             sessionManager.stopCamera(owner)
             sessionManager.release(owner)
