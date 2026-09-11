@@ -2,13 +2,16 @@ package com.smartview.glassai.bridge
 
 import android.Manifest
 import android.app.Application
+import android.app.KeyguardManager
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.app.NotificationManagerCompat
+import androidx.annotation.MainThread
 import androidx.core.content.ContextCompat
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.smartview.glassai.R
@@ -28,10 +31,15 @@ object NotificationBridgeRuntime : MusicController {
     val music = track.asStateFlow()
     private val inbox = MutableStateFlow<List<BridgeMessage>>(emptyList())
     val messages = inbox.asStateFlow()
+    private val assistantInbox = AssistantNotificationInbox()
+    val assistantNotifications: StateFlow<List<AssistantNotification>> = assistantInbox.notifications
+    /** RAM-only invalidation generation; callers compare equality, not an exact increment count. */
+    val assistantAccessEpoch: StateFlow<Long> = assistantInbox.accessEpoch
     private val problem = MutableStateFlow<String?>(null)
     val error = problem.asStateFlow()
     private var application: Application? = null
     private var listener: MusicController? = null
+    private var assistantController: AssistantMusicController? = null
     private var pageVisible = false
     private var musicClaimed = false
     private var startMusicJob: Job? = null
@@ -58,6 +66,7 @@ object NotificationBridgeRuntime : MusicController {
             { wechatSink?.showStatus() })
         scope.launch {
             preferences().settings.collect { settings ->
+                reconcileAssistantNotifications()
                 if (!settings.wechatEnabled) { inbox.value = emptyList(); notificationLease?.retire() }
                 if (!settings.musicEnabled) { track.value = null; musicSink?.showStatus() }
                 updateMusicClaim()
@@ -81,6 +90,9 @@ object NotificationBridgeRuntime : MusicController {
 
     internal fun attach(app: Application, controller: MusicController) {
         initialize(app)
+        if (listener != null) assistantInbox.invalidateAccess() else assistantInbox.clear()
+        assistantInbox.observeAccess(hasAccess = hasNotificationAccess(app), connected = true, locked = isDeviceLocked(app))
+        assistantController = controller as? AssistantMusicController
         listener = controller; connected.value = true; problem.value = null
         GlassesDisplayIntegration.router(app).registerMusic(this)
         updateMusicClaim()
@@ -90,6 +102,8 @@ object NotificationBridgeRuntime : MusicController {
         checkMain()
         if (listener !== controller) return
         listener = null; connected.value = false
+        assistantInbox.observeAccess(hasAccess = false, connected = false, locked = assistantInbox.deviceLocked)
+        assistantController = null; assistantInbox.clear()
         inbox.value = emptyList(); track.value = null
         notificationLease?.retire(); musicSink?.showStatus()
         application?.let { GlassesDisplayIntegration.router(it).unregisterMusic(this) }
@@ -120,6 +134,83 @@ object NotificationBridgeRuntime : MusicController {
         if (value != null && value.packageName !in preferences().settings.value.mediaPackages) return
         track.value = value
         if (value == null) musicSink?.showStatus() else showMusicIfAppropriate()
+    }
+
+    internal fun onAssistantSettingsChanged(settings: BridgeSettings) {
+        checkMain()
+        // Called synchronously by setters, including before a collector can observe off/on.
+        val access = reconcileAssistantNotifications()
+        assistantInbox.reconcile(settings, access, connected.value)
+    }
+
+    /** Listener screen-off/keyguard event: invalidate copied work even with no cached notifications. */
+    internal fun clearAssistantNotifications(controller: MusicController) {
+        checkMain()
+        if (listener === controller) assistantInbox.onDeviceLocked()
+    }
+
+    internal fun replaceAssistantNotification(controller: MusicController, key: String,
+        value: AssistantNotification?, privacyRemoval: Boolean = false) {
+        checkMain()
+        if (listener !== controller) return
+        assistantInbox.replace(key, authorizedAssistantNotification(controller, value), privacyRemoval)
+    }
+
+    internal fun readAssistantNotification(controller: MusicController, key: String,
+        read: () -> AssistantNotification?) {
+        checkMain()
+        if (listener !== controller) return
+        assistantInbox.replacePosted(key) { authorizedAssistantNotification(controller, read()) }
+    }
+
+    internal fun updateAssistantNotificationVisibility(controller: MusicController, key: String,
+        visibilityOverride: Int?, deviceLocked: Boolean) {
+        checkMain()
+        if (visibilityOverride == null || AssistantNotificationParser.hiddenByPolicy(visibilityOverride, deviceLocked)) {
+            // An absent ranking also occurs during ordinary removal; it alone is not privacy loss.
+            replaceAssistantNotification(controller, key, null, privacyRemoval = visibilityOverride != null)
+        }
+    }
+
+    private fun authorizedAssistantNotification(controller: MusicController,
+        value: AssistantNotification?): AssistantNotification? {
+        val wasLocked = assistantInbox.deviceLocked
+        val access = reconcileAssistantNotifications()
+        val settings = preferences().settings.value
+        val permitted = listener === controller && connected.value && access && settings.aiNotificationsEnabled &&
+            value != null && value.packageName in settings.aiNotificationPackages &&
+            !(assistantInbox.deviceLocked && !wasLocked) // The device may lock between parsing and publication.
+        return value.takeIf { permitted }
+    }
+
+    private fun reconcileAssistantNotifications(): Boolean {
+        val app = application ?: run { assistantInbox.clear(); return false }
+        val locked = isDeviceLocked(app)
+        val access = hasNotificationAccess(app)
+        assistantInbox.observeAccess(hasAccess = access, connected = connected.value, locked = locked)
+        assistantInbox.reconcile(preferences().settings.value, access, connected.value)
+        return access
+    }
+
+    /** Read at request time; a previously collected list is not a continuing authorization. */
+    @MainThread
+    fun notificationsForAssistant(packageName: String? = null): List<AssistantNotification> {
+        checkMain()
+        val access = reconcileAssistantNotifications()
+        val settings = application?.let { preferences().settings.value } ?: BridgeSettings()
+        return assistantInbox.forAssistant(settings, access, connected.value, packageName)
+    }
+
+    @MainThread
+    fun controlForAssistant(action: String, packageName: String? = null): String {
+        checkMain()
+        val app = application
+        val access = reconcileAssistantNotifications()
+        validateAssistantMusicRequest(action, packageName,
+            app?.let { preferences().settings.value } ?: BridgeSettings(), access, connected.value)
+        val controller = assistantController
+            ?: throw IllegalStateException("Assistant music control is unavailable. Reconnect the notification bridge.")
+        return controller.controlForAssistant(action, packageName)
     }
 
     private fun showMusicIfAppropriate() {
@@ -167,8 +258,16 @@ object NotificationBridgeRuntime : MusicController {
     override fun next() { checkMain(); if (preferences().settings.value.musicEnabled) listener?.next() }
     override fun previous() { checkMain(); if (preferences().settings.value.musicEnabled) listener?.previous() }
 
-    fun hasNotificationAccess(context: Context): Boolean =
-        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    fun hasNotificationAccess(context: Context): Boolean = try {
+        context.getSystemService(NotificationManager::class.java)?.isNotificationListenerAccessGranted(
+            ComponentName(context, NotificationBridgeService::class.java)) == true
+    } catch (_: RuntimeException) { false }
+
+    internal fun isDeviceLocked(context: Context): Boolean = try {
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        val power = context.getSystemService(PowerManager::class.java)
+        keyguard == null || power?.isInteractive != true || keyguard.isDeviceLocked || keyguard.isKeyguardLocked
+    } catch (_: RuntimeException) { true }
 
     fun openNotificationAccessSettings(context: Context) {
         val detail = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).apply {
@@ -180,5 +279,7 @@ object NotificationBridgeRuntime : MusicController {
         else context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    private fun checkMain() { check(Looper.myLooper() == Looper.getMainLooper()) }
+    private fun checkMain() {
+        check(Looper.myLooper() == Looper.getMainLooper()) { "Notification bridge calls must run on the main thread." }
+    }
 }

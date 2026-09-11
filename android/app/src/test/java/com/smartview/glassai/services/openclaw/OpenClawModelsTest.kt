@@ -33,13 +33,13 @@ class OpenClawModelsTest {
 
     @Test
     fun protocolConstantsAreTheAndroidOnes() {
-        assertEquals(3, OpenClawProtocol.PROTOCOL_VERSION)
+        assertEquals(4, OpenClawProtocol.PROTOCOL_VERSION)
         assertEquals("openclaw-android", OpenClawProtocol.CLIENT_ID)
         assertEquals("android", OpenClawProtocol.PLATFORM)
         assertEquals("Ray-Ban Meta Glasses", OpenClawProtocol.DISPLAY_NAME)
         assertEquals("node", OpenClawProtocol.CLIENT_MODE)
-        assertEquals("operator", OpenClawProtocol.ROLE)
-        assertEquals(listOf("operator.read", "operator.write"), OpenClawProtocol.SCOPES)
+        assertEquals("node", OpenClawProtocol.ROLE)
+        assertEquals(emptyList<String>(), OpenClawProtocol.SCOPES)
         assertEquals(listOf("camera"), OpenClawProtocol.CAPS)
         assertEquals(listOf("camera.snap", "camera.list", "device.status", "device.info"), OpenClawProtocol.COMMANDS)
         assertEquals("turbometa-chat", OpenClawProtocol.SESSION_KEY)

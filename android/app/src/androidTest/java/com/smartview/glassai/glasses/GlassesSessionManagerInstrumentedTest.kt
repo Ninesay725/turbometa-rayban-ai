@@ -392,6 +392,42 @@ class GlassesSessionManagerInstrumentedTest {
 
     // ---- Phase A final review Minor #19 / Recommendation 4: PAUSED/resume and device-side stop ----
 
+    /** Real assistant -> HTTP tool request -> DAT camera -> JPEG tool result -> model reply. */
+    @Test
+    fun customAssistantCapturesThroughItsSessionAndReturnsImageToConfiguredEndpoint() {
+        val gateway = okhttp3.mockwebserver.MockWebServer()
+        gateway.enqueue(okhttp3.mockwebserver.MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"snap-1","type":"function","function":{"name":"camera_capture","arguments":"{}"}}]}}]}"""))
+        gateway.enqueue(okhttp3.mockwebserver.MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"测试画面已收到"}}]}"""))
+        val activity = androidx.test.core.app.ActivityScenario.launch(com.smartview.glassai.MainActivity::class.java)
+        val tools = com.smartview.glassai.services.assistant.AssistantDeviceTools(targetContext as Application)
+        try {
+            onMain { awaitActiveDevice(); tools.enter() }
+            val reply = runBlocking {
+                com.smartview.glassai.services.assistant.AssistantEngine().reply(
+                    com.smartview.glassai.services.assistant.AssistantConfig(
+                        gateway.url("/v1").toString(), "fixture-vision", supportsImages = true,
+                        speakReplies = false, allowInsecureHttp = true),
+                    emptyList(), "看看前面", tools = tools,
+                )
+            }
+            assertEquals("测试画面已收到", reply.text)
+            assertEquals(listOf("camera_capture"), reply.toolsUsed)
+            assertNotNull(gateway.takeRequest(3, java.util.concurrent.TimeUnit.SECONDS))
+            val followup = gateway.takeRequest(3, java.util.concurrent.TimeUnit.SECONDS)!!.body.readUtf8()
+            assertTrue(followup.contains("data:image/jpeg;base64,/9j/"))
+            onMain {
+                assertNull(manager.currentCameraOwner)
+                assertTrue(manager.hasSession)
+                tools.showReply(reply.text)
+                tools.clearReply()
+            }
+        } finally {
+            onMain { tools.leave() }
+            activity.close()
+            gateway.shutdown()
+        }
+    }
+
     /** MockDeviceKit: a single captouch tap toggles pause/resume of the active stream. */
     @Test
     fun captouchTapPausesAndResumesTheStreamWithoutTeardown(): Unit = onMain {

@@ -1,0 +1,9 @@
+<resources>
+    <string name="openclaw_compat_title">网关兼容方式</string>
+    <string name="openclaw_compat_current">当前网关（协议 4）</string>
+    <string name="openclaw_compat_node_v3">官方协议 3–4</string>
+    <string name="openclaw_compat_legacy">旧版自定义网关（协议 3）</string>
+    <string name="openclaw_compat_help">按你的网关版本选择，然后重新连接。认证失败不会自动降级协议。更新此 App 不会更新你的服务器。</string>
+    <string name="openclaw_forget_pairing">清除这个网关的本地配对凭据</string>
+    <string name="openclaw_pairing_reset">已清除本地配对凭据。重新连接后，按提示在网关批准此设备。</string>
+</resources>

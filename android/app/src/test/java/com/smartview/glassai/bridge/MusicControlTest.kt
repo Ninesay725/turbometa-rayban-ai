@@ -8,6 +8,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MusicControlTest {
+    @Test fun assistantActionsRequireTheirExplicitCapabilityAndNeverUseToggleAsPlayOrPause() {
+        assertTrue(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_PLAY, "play"))
+        assertFalse(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_PAUSE, "play"))
+        assertTrue(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_PAUSE, "pause"))
+        assertFalse(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_PLAY_PAUSE, "pause"))
+        assertFalse(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_PLAY_PAUSE, "play"))
+        assertTrue(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_SKIP_TO_NEXT, "next"))
+        assertTrue(NotificationBridgeService.supportsAssistantAction(PlaybackState.ACTION_SKIP_TO_PREVIOUS, "previous"))
+        assertFalse(NotificationBridgeService.supportsAssistantAction(-1L, "unknown"))
+    }
+
     @Test fun toggleRequiresTheActionThatMatchesTheCurrentPlaybackState() {
         assertTrue(NotificationBridgeService.supportsToggle(PlaybackState.ACTION_PAUSE, true))
         assertFalse(NotificationBridgeService.supportsToggle(PlaybackState.ACTION_PLAY, true))

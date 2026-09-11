@@ -121,6 +121,7 @@ class OpenClawViewModel internal constructor(
     }
 
     val connectionState: StateFlow<OpenClawConnectionState> = service.connectionState
+    val isChatBusy: StateFlow<Boolean> = service.isChatBusy
 
     private val _messages = MutableStateFlow<List<OpenClawChatMessage>>(emptyList())
     val messages: StateFlow<List<OpenClawChatMessage>> = _messages.asStateFlow()
@@ -168,11 +169,6 @@ class OpenClawViewModel internal constructor(
 
     val isBluetoothAvailable: StateFlow<Boolean> =
         audioRoute?.bluetoothAvailable ?: MutableStateFlow(false)
-
-    /** Test hook: how many chat.send calls the Connected gate suppressed. */
-    @VisibleForTesting
-    internal var suppressedSends = 0
-        private set
 
     private var asr: SpeechRecognizerSession? = null
     private var chatJob: Job? = null
@@ -273,12 +269,11 @@ class OpenClawViewModel internal constructor(
 
     fun sendText() {
         val text = _inputText.value.trim()
-        if (text.isEmpty()) return
+        if (text.isEmpty() || _isSending.value || !deliver(text)) return
         flushPendingResponse()
         append(OpenClawChatMessage(role = OpenClawChatMessage.ROLE_USER, text = text))
         _inputText.value = ""
         showPendingReply(text)
-        deliver(text)
     }
 
     private fun showPendingReply(text: String, generation: Int = screenGeneration) {
@@ -289,19 +284,25 @@ class OpenClawViewModel internal constructor(
 
     /** Snap & Send: latest glasses frame (or a fresh capture) + the typed text or the photo prompt. */
     fun snapAndSend() {
-        if (_isSending.value) return
+        if (_isSending.value || !chatReady()) return
         _isSending.value = true
         val generation = screenGeneration
         snapJob = viewModelScope.launch {
             try {
                 val result = frames.snapshot(SNAP_MAX_WIDTH, SNAP_QUALITY, SNAP_TIMEOUT_MS)
                 currentCoroutineContext().ensureActive()
+                if (generation != screenGeneration || !chatReady()) return@launch
                 when (result) {
                     is SnapshotResult.Ok -> {
-                        val text = _inputText.value.trim().ifEmpty { str(R.string.openclaw_chat_photoprompt) }
+                        val draft = _inputText.value
+                        val text = draft.trim().ifEmpty { str(R.string.openclaw_chat_photoprompt) }
                         // BitmapFactory.decodeByteArray of a <= 1600 px JPEG is not main-thread work
                         val image = withContext(decodeDispatcher) { decodeImage(result.frame.jpeg) }
                         currentCoroutineContext().ensureActive()
+                        if (generation != screenGeneration) return@launch
+                        val base64 = Base64.getEncoder().encodeToString(result.frame.jpeg)
+                        // Capture/decode can outlive readiness; only commit the bubble after acceptance.
+                        if (!deliver(text, imageJpegBase64 = base64)) return@launch
                         flushPendingResponse()
                         append(
                             OpenClawChatMessage(
@@ -310,10 +311,8 @@ class OpenClawViewModel internal constructor(
                                 image = image,
                             )
                         )
-                        _inputText.value = ""
+                        if (_inputText.value == draft) _inputText.value = ""
                         showPendingReply(text, generation)
-                        val base64 = Base64.getEncoder().encodeToString(result.frame.jpeg)
-                        deliver(text, imageJpegBase64 = base64)
                     }
                     else -> {
                         Log.w(TAG, "snap failed: $result")
@@ -326,26 +325,21 @@ class OpenClawViewModel internal constructor(
         }
     }
 
-    /**
-     * The single wire-send path, gated on [OpenClawConnectionState.Connected] (Task 3 known gap):
-     * OpenClawNodeService.sendChatMessage() answers true for any live socket, including one that
-     * has not finished the `connect` hello, so the service alone cannot tell a caller the gateway
-     * would accept the message. The UI disables its send affordances off Connected as well; this
-     * is the backstop that keeps a pre-hello socket from swallowing a chat.send.
-     */
-    private fun deliver(text: String, imageJpegBase64: String? = null) {
-        if (connectionState.value != OpenClawConnectionState.Connected) {
-            suppressedSends++
-            Log.w(TAG, "chat.send dropped: not connected (${connectionState.value})")
-            return
-        }
-        if (!service.sendChatMessage(text, imageJpegBase64)) Log.w(TAG, "chat.send dropped: no socket")
+    private fun chatReady(): Boolean =
+        connectionState.value == OpenClawConnectionState.Connected && !isChatBusy.value
+
+    /** Recheck here for late callbacks; the service atomically accepts or rejects the send. */
+    private fun deliver(text: String, imageJpegBase64: String? = null): Boolean {
+        if (!chatReady()) return false
+        val accepted = service.sendChatMessage(text, imageJpegBase64)
+        if (!accepted) Log.w(TAG, "Chat send rejected; draft retained")
+        return accepted
     }
 
     // ---- voice (Fun-ASR) ----
 
     fun startListening() {
-        if (_isListening.value) return
+        if (_isListening.value || _isSending.value || isChatBusy.value) return
         val key = alibabaKey()
         if (key.isNullOrBlank()) {
             append(OpenClawChatMessage(role = OpenClawChatMessage.ROLE_ASSISTANT, text = str(R.string.openclaw_chat_noapikey)))
@@ -447,15 +441,14 @@ class OpenClawViewModel internal constructor(
 
     fun sendAsrText() {
         val text = (_asrText.value + _asrPartial.value).trim()
+        if (text.isEmpty() || _isSending.value || !deliver(text)) return
         _asrText.value = ""
         _asrPartial.value = ""
         _asrError.value = null
         _asrNotice.value = null
-        if (text.isEmpty()) return
         flushPendingResponse()
         append(OpenClawChatMessage(role = OpenClawChatMessage.ROLE_USER, text = text))
         showPendingReply(text)
-        deliver(text)
     }
 
     fun cancelAsr() {

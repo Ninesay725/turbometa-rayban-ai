@@ -135,6 +135,9 @@ class GlassesSessionManager internal constructor(
     private var enabledSetting: Boolean? = null
     private val _displayState = MutableStateFlow(GlassesDisplayState.NOT_ATTACHED)
     val displayState: StateFlow<GlassesDisplayState> = _displayState.asStateFlow()
+    private val _privateDisplayEpoch = MutableStateFlow(0L)
+    /** Invalidates private content on observed readiness loss, even if consumers miss pause/resume. */
+    val privateDisplayEpoch: StateFlow<Long> = _privateDisplayEpoch.asStateFlow()
     private val _isDisplayAvailable = MutableStateFlow(false)
     val isDisplayAvailable: StateFlow<Boolean> = _isDisplayAvailable.asStateFlow()
     @VisibleForTesting
@@ -500,6 +503,7 @@ class GlassesSessionManager internal constructor(
     private fun onSessionState(source: GlassesSession, state: DeviceSessionState) {
         if (source !== session) return
         Log.d(TAG, "session state: $state")
+        if (state != DeviceSessionState.STARTED) invalidatePrivateDisplayIfReady()
         _sessionState.value = state
         when (state) {
             DeviceSessionState.STARTED -> maybeAttachDisplay()
@@ -580,7 +584,9 @@ class GlassesSessionManager internal constructor(
                 displayStateJob = scope.launch {
                     attached.state.collect { state ->
                         if (display === attached) {
-                            _displayState.value = GlassesDisplayState.valueOf(state.name)
+                            val next = GlassesDisplayState.valueOf(state.name)
+                            if (next != GlassesDisplayState.STARTED) invalidatePrivateDisplayIfReady()
+                            _displayState.value = next
                         }
                     }
                 }
@@ -590,6 +596,7 @@ class GlassesSessionManager internal constructor(
 
     private fun detachDisplay() {
         val attached = display ?: return
+        invalidatePrivateDisplayIfReady()
         displayStateJob?.cancel()
         displayStateJob = null
         display = null
@@ -604,6 +611,13 @@ class GlassesSessionManager internal constructor(
             runCatching { attached.close() }.onFailure { Log.w(TAG, "display.close failed", it) }
         }
         _displayState.value = GlassesDisplayState.NOT_ATTACHED
+    }
+
+    private fun invalidatePrivateDisplayIfReady() {
+        if (_sessionState.value == DeviceSessionState.STARTED &&
+            _displayState.value == GlassesDisplayState.STARTED) {
+            _privateDisplayEpoch.value++
+        }
     }
 
     private inline fun timedStop(capability: String, stop: () -> Unit) {

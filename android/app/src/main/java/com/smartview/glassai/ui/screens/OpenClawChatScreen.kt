@@ -103,6 +103,7 @@ fun OpenClawChatScreen(
     val inputText by viewModel.inputText.collectAsState()
     val showTextInput by viewModel.showTextInput.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
+    val isChatBusy by viewModel.isChatBusy.collectAsState()
     val isListening by viewModel.isListening.collectAsState()
     val asrText by viewModel.asrText.collectAsState()
     val asrPartial by viewModel.asrPartial.collectAsState()
@@ -111,6 +112,7 @@ fun OpenClawChatScreen(
     val audioSource by viewModel.desiredAudioSource.collectAsState()
     val isBluetoothAvailable by viewModel.isBluetoothAvailable.collectAsState()
     val isConnected = connectionState == OpenClawConnectionState.Connected
+    val canSend = isConnected && !isSending && !isChatBusy
     val listState = rememberLazyListState()
 
     // RECORD_AUDIO is requested lazily, exactly like Live AI: the chat screen is usable without the
@@ -245,7 +247,7 @@ fun OpenClawChatScreen(
                                 OutlinedButton(onClick = { viewModel.cancelAsr() }) { Text(stringResource(R.string.cancel)) }
                                 Button(
                                     onClick = { viewModel.sendAsrText() },
-                                    enabled = transcript.isNotBlank() && isConnected,
+                                    enabled = transcript.isNotBlank() && canSend,
                                     colors = ButtonDefaults.buttonColors(containerColor = OpenClawColor)
                                 ) { Text(stringResource(R.string.openclaw_chat_sendvoice)) }
                             }
@@ -281,12 +283,12 @@ fun OpenClawChatScreen(
                     ActionButton(
                         icon = Icons.Default.CameraAlt,
                         label = if (isSending) stringResource(R.string.openclaw_chat_sending) else stringResource(R.string.openclaw_chat_snap),
-                        enabled = isConnected && !isSending,
+                        enabled = canSend,
                         onClick = { viewModel.snapAndSend() }
                     )
                     FilledIconButton(
                         onClick = { toggleListening() },
-                        enabled = isConnected,
+                        enabled = isListening || canSend,
                         modifier = Modifier.size(72.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = if (isListening) Color(0xFFE53935) else OpenClawColor
@@ -313,13 +315,14 @@ fun OpenClawChatScreen(
                         OutlinedTextField(
                             value = inputText,
                             onValueChange = { viewModel.onInputChanged(it) },
+                            enabled = !isSending && !isChatBusy,
                             modifier = Modifier.weight(1f),
                             placeholder = { Text(stringResource(R.string.openclaw_chat_placeholder)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { if (isConnected) viewModel.sendText() })
+                            keyboardActions = KeyboardActions(onSend = { if (canSend) viewModel.sendText() })
                         )
-                        IconButton(onClick = { viewModel.sendText() }, enabled = inputText.isNotBlank() && isConnected) {
+                        IconButton(onClick = { viewModel.sendText() }, enabled = inputText.isNotBlank() && canSend) {
                             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.openclaw_chat_sendvoice), tint = OpenClawColor)
                         }
                     }

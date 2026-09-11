@@ -108,6 +108,11 @@ class GlassesDisplayManager internal constructor(
     }
 
     /** A feature's cleanup must not clear content subsequently shown by another feature. */
+    fun ownedCard(owner: Any): DisplayCard? {
+        checkMain()
+        return _currentCard.value.takeIf { contentOwner === owner }
+    }
+
     fun ownedSink(owner: Any): GlassesDisplaySink = object : GlassesDisplaySink {
         override fun show(card: DisplayCard) {
             this@GlassesDisplayManager.show(card)

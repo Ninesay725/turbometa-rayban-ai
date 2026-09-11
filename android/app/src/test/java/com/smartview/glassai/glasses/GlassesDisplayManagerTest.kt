@@ -3,8 +3,11 @@ package com.smartview.glassai.glasses
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceType
 import com.meta.wearable.dat.display.types.DisplayError
+import com.meta.wearable.dat.core.session.DeviceSessionState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -48,6 +51,112 @@ class GlassesDisplayManagerTest {
         f.manager.showPage(feature.copy(page = 1))
         owner.showStatus()
         assertNull(f.manager.currentCard.value)
+    }
+
+    @Test
+    fun ownedCardReadsThePageSelectedByAGlassesButton() = runTest(UnconfinedTestDispatcher()) {
+        val f = Fixture(this)
+        val origin = Any()
+        val sink = f.manager.ownedSink(origin)
+        sink.show(feature)
+        f.start()
+        runCurrent()
+        f.manager.actionHandler = { action ->
+            if (action is DisplayAction.Page) f.manager.showPage(action.card)
+        }
+        val nextPage = feature.copy(page = 1)
+        f.manager.actionCallback()(DisplayAction.Page(nextPage))
+        runCurrent()
+
+        assertSame(nextPage, f.manager.ownedCard(origin))
+        assertNull(f.manager.ownedCard(Any()))
+        sink.clear()
+        assertNull(f.manager.ownedCard(origin))
+    }
+
+    @Test
+    fun equalOwnerTokensCannotReadOrClearAnotherOwnersPrivateCard() = runTest(UnconfinedTestDispatcher()) {
+        val f = Fixture(this)
+        val firstOrigin = String(charArrayOf('a'))
+        val secondOrigin = String(charArrayOf('a'))
+        assertEquals(firstOrigin, secondOrigin)
+        assertFalse(firstOrigin === secondOrigin)
+        val first = f.manager.ownedSink(firstOrigin)
+        val second = f.manager.ownedSink(secondOrigin)
+        val summary = DisplayCard.WeChat("Summary", "Private fixture")
+        first.show(summary)
+        f.start()
+        runCurrent()
+
+        // Equal card contents do not preserve the superseded feature's ownership.
+        second.show(summary.copy())
+        runCurrent()
+        first.clear()
+        first.showStatus()
+        assertNull(f.manager.ownedCard(firstOrigin))
+        assertEquals(summary, f.manager.ownedCard(secondOrigin))
+        assertEquals(summary, f.manager.lastSent.value)
+        second.clear()
+        assertNull(f.manager.currentCard.value)
+        assertNull(f.manager.lastSent.value)
+    }
+
+    @Test
+    fun ownedPrivateCleanupPreventsReplayAfterDisplayReplacement() = runTest(UnconfinedTestDispatcher()) {
+        val worker = QueuedSendDispatcher()
+        val f = Fixture(this, sendDispatcher = worker)
+        val origin = Any()
+        val sink = f.manager.ownedSink(origin)
+        sink.show(DisplayCard.WeChat("Summary", "Private fixture"))
+        f.start()
+        runCurrent()
+        val outgoing = f.display
+
+        f.sessions.setDisplayEnabled(false)
+        sink.clear() // The feature must retire its private card when availability is lost.
+        f.sessions.setDisplayEnabled(true)
+        f.start()
+        runCurrent()
+        worker.finishOne() // The old capability completes after the replacement started.
+        runCurrent()
+        assertNull(f.manager.lastSent.value)
+        assertNull(f.manager.ownedCard(origin))
+        assertEquals(1, worker.pendingCount)
+        worker.finishOne()
+        runCurrent()
+
+        assertEquals(status, f.manager.lastSent.value)
+        assertNull(f.manager.currentCard.value)
+        assertEquals(1, outgoing.sendCalls)
+        assertEquals(1, f.display.sendCalls)
+        assertEquals(0, worker.pendingCount)
+    }
+
+    @Test
+    fun privateEpochRetiresOwnedSummaryAcrossSameDisplayPauseResume() = runTest(UnconfinedTestDispatcher()) {
+        val f = Fixture(this)
+        val origin = Any()
+        val sink = f.manager.ownedSink(origin)
+        val summary = DisplayCard.WeChat("Summary", "Private fixture")
+        sink.show(summary)
+        f.start()
+        runCurrent()
+        assertEquals(summary, f.manager.lastSent.value)
+        val boundEpoch = f.sessions.privateDisplayEpoch.value
+        val display = f.display
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            f.sessions.privateDisplayEpoch.first { it != boundEpoch }
+            sink.clear()
+        }
+
+        f.factory.last.stateFlow.value = DeviceSessionState.PAUSED
+        f.factory.last.emitStarted()
+        runCurrent()
+
+        assertSame(display, f.sessions.currentDisplay())
+        assertNull(f.manager.ownedCard(origin))
+        assertNull(f.manager.lastSent.value)
+        assertEquals(1, display.sendCalls) // Resuming cannot publish the retired summary again.
     }
 
     @Test

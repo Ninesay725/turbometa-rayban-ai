@@ -6,14 +6,17 @@ import com.meta.wearable.dat.core.types.DeviceSessionError
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -64,6 +67,66 @@ class DisplaySessionLifecycleTest {
         assertEquals(GlassesDisplayState.STOPPED, manager.displayState.value)
         factory.last.emitStarted()
         assertEquals(1, factory.last.addDisplayCalls)
+    }
+
+    @Test fun privateEpochSurvivesSameDisplayPauseResumeBeforeConsumerRuns() = runTest(UnconfinedTestDispatcher()) {
+        val manager = manager()
+        observer.device.value = capable
+        manager.acquire("feature")
+        factory.last.emitStarted()
+        factory.last.display.emitStarted()
+        val display = manager.currentDisplay()
+        val boundEpoch = manager.privateDisplayEpoch.value
+        val observed = mutableListOf<Long>()
+        backgroundScope.launch(StandardTestDispatcher(testScheduler)) {
+            manager.privateDisplayEpoch.collect { observed += it }
+        }
+        runCurrent()
+
+        factory.last.stateFlow.value = DeviceSessionState.PAUSED
+        assertEquals(boundEpoch + 1, manager.privateDisplayEpoch.value)
+        factory.last.emitStarted()
+        assertSame(display, manager.currentDisplay())
+        assertEquals(GlassesDisplayState.STARTED, manager.displayState.value)
+        assertEquals(listOf(boundEpoch), observed) // The feature has not consumed either transition.
+        runCurrent()
+        assertEquals(listOf(boundEpoch, boundEpoch + 1), observed)
+    }
+
+    @Test fun privateEpochChangesOncePerReadyDisplayLoss() = runTest(UnconfinedTestDispatcher()) {
+        val manager = manager()
+        observer.device.value = capable
+        manager.acquire("feature")
+        factory.last.emitStarted()
+        assertEquals(0L, manager.privateDisplayEpoch.value) // STARTING cannot contain private content.
+        factory.last.display.emitStarted()
+        val boundEpoch = manager.privateDisplayEpoch.value
+
+        factory.last.display.emitStopped() // STOPPING then STOPPED must invalidate only once.
+        assertEquals(boundEpoch + 1, manager.privateDisplayEpoch.value)
+        manager.setDisplayEnabled(false)
+        manager.setDisplayEnabled(false)
+        assertEquals(boundEpoch + 1, manager.privateDisplayEpoch.value)
+        manager.setDisplayEnabled(true)
+        factory.last.display.emitStarted()
+        manager.setDisplayEnabled(false) // Explicit detach of a ready capability also invalidates.
+        assertEquals(boundEpoch + 2, manager.privateDisplayEpoch.value)
+    }
+
+    @Test fun privateEpochDoesNotCountSessionAndDisplayTeardownTwice() = runTest(UnconfinedTestDispatcher()) {
+        val manager = manager()
+        observer.device.value = capable
+        manager.acquire("feature")
+        factory.last.emitStarted()
+        factory.last.display.emitStarted()
+        val boundEpoch = manager.privateDisplayEpoch.value
+
+        factory.last.emitStoppedByDevice()
+        assertEquals(boundEpoch + 1, manager.privateDisplayEpoch.value)
+        assertNull(manager.currentDisplay())
+        manager.stopSession()
+        manager.resetForTests()
+        assertEquals(boundEpoch + 1, manager.privateDisplayEpoch.value)
     }
 
     @Test fun ordinaryGlassesNeverAddOrRemoveDisplay() = runTest(UnconfinedTestDispatcher()) {

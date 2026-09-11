@@ -54,6 +54,7 @@ import com.smartview.glassai.R
 import com.smartview.glassai.services.openclaw.OpenClawConnectionState
 import com.smartview.glassai.services.openclaw.OpenClawNodeService
 import com.smartview.glassai.services.openclaw.OpenClawProtocol
+import com.smartview.glassai.services.openclaw.OpenClawCompatibility
 import com.smartview.glassai.ui.components.openClawStatusColor
 import com.smartview.glassai.ui.components.openClawStatusText
 import com.smartview.glassai.ui.theme.AppRadius
@@ -73,6 +74,8 @@ fun OpenClawSettingsScreen(onBackClick: () -> Unit) {
     var portText by remember { mutableStateOf(service.gatewayPort.toString()) }
     var scheme by remember { mutableStateOf(service.gatewayScheme) }
     var token by remember { mutableStateOf(service.loadGatewayToken() ?: "") }
+    var compatibility by remember { mutableStateOf(service.compatibility) }
+    var pairingReset by remember { mutableStateOf(false) }
     val isConnected = connectionState == OpenClawConnectionState.Connected
 
     /** Persists the four fields without dialing (Task 9 D-3: "Done" used to discard edits). */
@@ -81,6 +84,7 @@ fun OpenClawSettingsScreen(onBackClick: () -> Unit) {
         service.gatewayPort = portText.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: OpenClawProtocol.DEFAULT_PORT
         service.gatewayScheme = scheme
         service.saveGatewayToken(token) // blank deletes
+        service.compatibility = compatibility
     }
 
     fun saveAndConnect() {
@@ -134,6 +138,17 @@ fun OpenClawSettingsScreen(onBackClick: () -> Unit) {
             }
 
             SectionCard(title = stringResource(R.string.openclaw_gateway_section)) {
+                Text(stringResource(R.string.openclaw_compat_title))
+                OpenClawCompatibility.entries.forEach { profile ->
+                    FilterChip(selected = compatibility == profile, onClick = { compatibility = profile },
+                        label = { Text(stringResource(when (profile) {
+                            OpenClawCompatibility.CURRENT -> R.string.openclaw_compat_current
+                            OpenClawCompatibility.ALLOW_NODE_V3 -> R.string.openclaw_compat_node_v3
+                            OpenClawCompatibility.LEGACY_CUSTOM_V3 -> R.string.openclaw_compat_legacy
+                        })) })
+                }
+                Text(stringResource(R.string.openclaw_compat_help), style = MaterialTheme.typography.bodySmall)
+                Spacer(modifier = Modifier.height(AppSpacing.small))
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
@@ -186,6 +201,13 @@ fun OpenClawSettingsScreen(onBackClick: () -> Unit) {
                         colors = ButtonDefaults.buttonColors(containerColor = OpenClawColor)
                     ) { Text(stringResource(R.string.openclaw_connect)) }
                 }
+                TextButton(onClick = {
+                    service.disconnect()
+                    save()
+                    service.forgetPairedDeviceToken()
+                    pairingReset = true
+                }) { Text(stringResource(R.string.openclaw_forget_pairing)) }
+                if (pairingReset) Text(stringResource(R.string.openclaw_pairing_reset), style = MaterialTheme.typography.bodySmall)
             }
 
             SectionCard(title = stringResource(R.string.openclaw_capabilities)) {

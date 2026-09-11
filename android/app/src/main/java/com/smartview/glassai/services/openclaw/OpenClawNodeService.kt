@@ -37,15 +37,9 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 
 /**
- * OpenClaw Gateway client (research §2). One WebSocket, JSON text frames, three envelopes
- * (req / res / event). The app is an *operator* (chat.send, chat events) and a *node*
- * (node.invoke → OpenClawCommandHandler → node.invoke.result).
- *
- * Differences from iOS that are deliberate (research §10): only the `connect` response (matched
- * by id) counts as "hello ok"; emptying the token deletes it; the token is percent-encoded; a close
- * and a failure for the same socket are counted once; the backoff wait is its own state
- * ([OpenClawConnectionState.Reconnecting]) so auto-connect cannot defeat it; `openclaw_enabled`
- * does not exist.
+ * OpenClaw camera node. Official gateways bind one role to each WebSocket; node connections
+ * cannot call operator RPCs such as chat.send. The former custom operator/node port remains
+ * available only through explicit [OpenClawCompatibility.LEGACY_CUSTOM_V3] configuration.
  *
  * Threading: OkHttp callbacks arrive on OkHttp threads; every mutable field is guarded by [lock];
  * flows are thread-safe. Nothing here touches Android UI classes so the class is JVM-testable.
@@ -57,13 +51,14 @@ class OpenClawNodeService(
     private val store: OpenClawSettingsStore,
     private val identity: Lazy<OpenClawDeviceIdentity>,
     private val clientInfo: OpenClawClientInfo,
-    private val httpClient: OkHttpClient,
+    httpClient: OkHttpClient,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val tickIntervalMs: Long = TICK_INTERVAL_MS,
     private val reconnectDelaysMs: List<Long> = RECONNECT_DELAYS_MS,
     private val maxReconnectAttempts: Int = MAX_RECONNECT_ATTEMPTS,
     private val invokeTimeoutMs: Long = DEFAULT_INVOKE_TIMEOUT_MS,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val handshakeTimeoutMs: Long = 10_000L,
 ) {
     companion object {
         private const val TAG = "OpenClawNodeService"
@@ -121,6 +116,8 @@ class OpenClawNodeService(
          */
         fun lanHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(PING_INTERVAL_S, TimeUnit.SECONDS)
@@ -129,6 +126,11 @@ class OpenClawNodeService(
 
     private val gson = Gson()
     private val lock = Any()
+    // Enforce at the socket boundary too: injected clients must not move endpoint-bound credentials.
+    private val httpClient = httpClient.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
     private var webSocket: WebSocket? = null
     private var shouldReconnect = false
@@ -136,6 +138,16 @@ class OpenClawNodeService(
     private var tickJob: Job? = null
     private var reconnectJob: Job? = null
     private var pendingConnectId: String? = null
+    private var handshakeJob: Job? = null
+    private var activeCompatibility = OpenClawCompatibility.CURRENT
+    private var activeEndpoint: String? = null
+    private var activeSharedToken: String? = null
+    private var activeDeviceId: String? = null
+    private var nodeChat: OpenClawNodeChat? = null
+
+    /** Pending gateway request identifier for a parent-owned pairing UI, if supplied. */
+    var pairingRequestId: String? = null
+        private set
 
     @Volatile
     private var router: OpenClawCommandHandler? = null
@@ -150,7 +162,14 @@ class OpenClawNodeService(
         get() = synchronized(lock) { tickJob?.isActive == true }
 
     private val _connectionState = MutableStateFlow<OpenClawConnectionState>(OpenClawConnectionState.Disconnected)
-    val connectionState: StateFlow<OpenClawConnectionState> = _connectionState.asStateFlow()
+    /** Camera transport readiness, independent of chat subscription or inference errors. */
+    val nodeConnectionState: StateFlow<OpenClawConnectionState> = _connectionState.asStateFlow()
+    private val _chatConnectionState = MutableStateFlow<OpenClawConnectionState>(OpenClawConnectionState.Disconnected)
+    /** Existing UI consumers see Connected only once chat subscription has been acknowledged. */
+    val connectionState: StateFlow<OpenClawConnectionState> = _chatConnectionState.asStateFlow()
+    val chatConnectionState: StateFlow<OpenClawConnectionState> = connectionState
+    private val _isChatBusy = MutableStateFlow(false)
+    val isChatBusy: StateFlow<Boolean> = _isChatBusy.asStateFlow()
 
     private val _chatEvents = MutableSharedFlow<OpenClawChatEvent>(extraBufferCapacity = 64)
     val chatEvents: SharedFlow<OpenClawChatEvent> = _chatEvents.asSharedFlow()
@@ -165,7 +184,22 @@ class OpenClawNodeService(
         get() = _chatEvents.subscriptionCount
 
     val nodeId: String
-        get() = clientInfo.nodeId
+        get() = synchronized(lock) {
+            if (activeCompatibility.isLegacyCustom) clientInfo.nodeId else activeDeviceId ?: clientInfo.nodeId
+        }
+
+    /** Takes effect on the next connection; no rejection ever changes it implicitly. */
+    var compatibility: OpenClawCompatibility
+        get() = store.compatibility
+        set(value) { store.compatibility = value }
+
+    /** Explicit recovery after a revoked paired token; never used as an automatic auth fallback. */
+    fun forgetPairedDeviceToken() {
+        synchronized(lock) {
+            val endpoint = buildUrl(OpenClawCompatibility.CURRENT) ?: return
+            store.saveDeviceToken(endpoint, deviceIdentity.deviceId, OpenClawProtocol.ROLE, null)
+        }
+    }
 
     var gatewayHost: String
         get() = store.host
@@ -198,6 +232,13 @@ class OpenClawNodeService(
     fun connect(force: Boolean = false) {
         synchronized(lock) {
             val state = _connectionState.value
+            if (state == OpenClawConnectionState.WaitingForPairing && !force) return
+            if (state == OpenClawConnectionState.Connected && force &&
+                _chatConnectionState.value != OpenClawConnectionState.Connected
+            ) {
+                nodeChat?.start()
+                return
+            }
             if (state == OpenClawConnectionState.Connected || state == OpenClawConnectionState.Connecting) {
                 Log.d(TAG, "connect(): already $state")
                 return
@@ -222,10 +263,13 @@ class OpenClawNodeService(
             tickJob?.cancel()
             tickJob = null
             pendingConnectId = null
+            handshakeJob?.cancel()
+            handshakeJob = null
+            pairingRequestId = null
             val socket = webSocket
             webSocket = null
             runCatching { socket?.close(1000, "User disconnected") }
-            _connectionState.value = OpenClawConnectionState.Disconnected
+            updateConnectionState(OpenClawConnectionState.Disconnected)
         }
     }
 
@@ -244,37 +288,58 @@ class OpenClawNodeService(
             webSocket = null
             runCatching { old.close(1000, "reconnect") }
         }
-        val url = buildUrl()
+        val url = runCatching {
+            activeCompatibility = store.compatibility
+            activeSharedToken = store.loadToken()?.takeIf { it.isNotBlank() }
+            activeEndpoint = buildUrl(OpenClawCompatibility.CURRENT)
+            activeDeviceId = null
+            pairingRequestId = null
+            buildUrl(activeCompatibility)
+        }.getOrElse {
+            failWithTransport("SETTINGS: unable to load gateway settings")
+            return
+        }
         // Request.Builder().url() throws IllegalArgumentException for anything OkHttp cannot parse;
         // that must become the InvalidUrl state, never an exception in a Compose click handler.
         val request = url?.let { runCatching { Request.Builder().url(it).build() }.getOrNull() }
         if (request == null) {
             Log.e(TAG, "invalid gateway address: '${store.host}:${store.port}'")
             shouldReconnect = false
-            _connectionState.value = OpenClawConnectionState.Error(OpenClawErrorReason.InvalidUrl)
+            updateConnectionState(OpenClawConnectionState.Error(OpenClawErrorReason.InvalidUrl))
             return
         }
         Log.d(TAG, "connecting to ${store.scheme}://${store.host}:${store.port}")
-        _connectionState.value = OpenClawConnectionState.Connecting
+        updateConnectionState(OpenClawConnectionState.Connecting)
         pendingConnectId = null
         webSocket = httpClient.newWebSocket(request, Listener())
+        val socket = webSocket
+        handshakeJob?.cancel()
+        handshakeJob = scope.launch {
+            delay(handshakeTimeoutMs)
+            synchronized(lock) {
+                if (!isActive) return@synchronized
+                if (socket === webSocket && _connectionState.value == OpenClawConnectionState.Connecting) {
+                    failWithTransport("HANDSHAKE_TIMEOUT: gateway did not complete connect")
+                }
+            }
+        }
     }
 
     /**
-     * `ws(s)://host:port/` plus `?token=<percent-encoded>` when a token is stored; null if the
-     * address is malformed. Built through OkHttp's HttpUrl so the token is RFC 3986 percent-encoded
-     * (a space is `%20`, not `+` — java.net.URLEncoder is form encoding) and IPv6 literals are
+     * Official auth travels only in connect.params.auth. The explicit custom profile retains
+     * its old percent-encoded query token. Null if the address is malformed. HttpUrl ensures
+     * RFC 3986 encoding (a space is `%20`, not `+`) and IPv6 literals are
      * validated; a bare `::1` is bracketed for the user. Uri.encode is unavailable on the JVM.
      */
     @VisibleForTesting
-    internal fun buildUrl(): String? {
+    internal fun buildUrl(profile: OpenClawCompatibility = store.compatibility): String? {
         val rawHost = store.host.trim()
         val port = store.port
-        if (rawHost.isEmpty() || rawHost.any { it.isWhitespace() } || port !in 1..65535) return null
+        if (rawHost.isEmpty() || rawHost.any { it.isWhitespace() || it in "/\\?#@" } || port !in 1..65535) return null
         val host = if (rawHost.contains(':') && !rawHost.startsWith("[")) "[$rawHost]" else rawHost
         val httpScheme = if (store.scheme == OpenClawProtocol.SCHEME_WSS) "https" else "http"
         val base = "$httpScheme://$host:$port/".toHttpUrlOrNull() ?: return null
-        val token = store.loadToken()?.takeIf { it.isNotBlank() }
+        val token = if (profile.isLegacyCustom) store.loadToken()?.takeIf { it.isNotBlank() } else null
         val url = if (token != null) base.newBuilder().addQueryParameter("token", token).build() else base
         // OkHttp accepts ws/wss request URLs and maps them back to http/https internally.
         return url.toString().replaceFirst("http", "ws")
@@ -304,7 +369,7 @@ class OpenClawNodeService(
         }
     }
 
-    private fun handleDisconnect(socket: WebSocket, error: Throwable?) {
+    private fun handleDisconnect(socket: WebSocket, error: Throwable?, retryAfterMs: Long = 0L) {
         synchronized(lock) {
             // A closed and a failed callback for the same socket, or callbacks from a socket we
             // already replaced, must not be counted twice.
@@ -313,25 +378,28 @@ class OpenClawNodeService(
             tickJob?.cancel()
             tickJob = null
             pendingConnectId = null
+            handshakeJob?.cancel()
+            handshakeJob = null
 
             if (!shouldReconnect) {
-                _connectionState.value = OpenClawConnectionState.Disconnected
+                updateConnectionState(OpenClawConnectionState.Disconnected)
                 return
             }
             reconnectAttempts++
             if (reconnectAttempts > maxReconnectAttempts) {
                 Log.e(TAG, "giving up after $maxReconnectAttempts reconnect attempts")
                 shouldReconnect = false
-                _connectionState.value = OpenClawConnectionState.Error(OpenClawErrorReason.MaxRetries(maxReconnectAttempts))
+                updateConnectionState(OpenClawConnectionState.Error(OpenClawErrorReason.MaxRetries(maxReconnectAttempts)))
                 return
             }
-            val delayMs = reconnectDelaysMs[minOf(reconnectAttempts - 1, reconnectDelaysMs.size - 1)]
+            val delayMs = maxOf(retryAfterMs, reconnectDelaysMs[minOf(reconnectAttempts - 1, reconnectDelaysMs.size - 1)])
             Log.w(TAG, "reconnecting in ${delayMs}ms (attempt $reconnectAttempts/$maxReconnectAttempts)" +
                 (error?.let { ", cause: ${it.message}" } ?: ""))
-            _connectionState.value = OpenClawConnectionState.Reconnecting(reconnectAttempts)
+            updateConnectionState(OpenClawConnectionState.Reconnecting(reconnectAttempts))
             reconnectJob = scope.launch {
                 delay(delayMs)
                 synchronized(lock) {
+                    if (!isActive) return@synchronized
                     if (shouldReconnect && webSocket == null) startConnection()
                 }
             }
@@ -347,35 +415,49 @@ class OpenClawNodeService(
             Log.w(TAG, "ignoring non-JSON frame: ${e.message}")
             return
         }
-        val type = json.string("type") ?: return
-        when {
-            type == "event" && json.string("event") == "connect.challenge" -> {
-                val nonce = json.obj("payload")?.string("nonce") ?: ""
-                sendConnect(socket, nonce)
+        synchronized(lock) {
+            if (socket !== webSocket) return
+            val type = json.string("type") ?: return
+            when {
+                type == "event" && json.string("event") == "connect.challenge" -> {
+                    if (_connectionState.value != OpenClawConnectionState.Connecting || pendingConnectId != null) return
+                    val nonce = json.obj("payload")?.string("nonce")?.trim()
+                    if (nonce.isNullOrEmpty()) {
+                        failWithTransport("DEVICE_AUTH_NONCE_REQUIRED: empty gateway challenge")
+                        return
+                    }
+                    sendConnect(socket, nonce)
+                }
+                type == "res" -> handleResponse(socket, json)
+                _connectionState.value != OpenClawConnectionState.Connected -> Unit
+                type == "evt" || type == "event" -> handleEvent(socket, json.string("event") ?: json.string("method") ?: "", json)
+                type == "req" || type == "request" -> handleRequest(socket, json)
+                else -> Log.d(TAG, "unknown message type: $type")
             }
-            type == "res" -> handleResponse(json)
-            type == "evt" || type == "event" -> handleEvent(json.string("event") ?: json.string("method") ?: "", json)
-            type == "req" || type == "request" -> handleRequest(socket, json)
-            else -> Log.d(TAG, "unknown message type: $type")
         }
     }
 
     private fun sendConnect(socket: WebSocket, nonce: String) {
         val id = UUID.randomUUID().toString()
         val signedAt = clock()
-        val token = store.loadToken()?.takeIf { it.isNotBlank() }
+        var cachedToken: String? = null
         // Runs on the OkHttp reader thread and touches the Keystore / EncryptedSharedPreferences on
         // first use. A throw here used to escape into OkHttp, which reported it as a socket failure:
         // five reconnects and a misleading "Connection failed after 5 retries" (final review I3).
         val signed = runCatching {
             val signer = deviceIdentity // first use loads or generates the seed
+            activeDeviceId = signer.deviceId
+            if (!activeCompatibility.isLegacyCustom) {
+                cachedToken = store.loadDeviceToken(checkNotNull(activeEndpoint), signer.deviceId, OpenClawProtocol.ROLE)
+                    ?.takeIf { it.isNotBlank() }
+            }
             signer to signer.signConnect(
                 clientId = OpenClawProtocol.CLIENT_ID,
                 clientMode = OpenClawProtocol.CLIENT_MODE,
-                role = OpenClawProtocol.ROLE,
-                scopes = OpenClawProtocol.SCOPES,
+                role = activeCompatibility.role,
+                scopes = activeCompatibility.scopes,
                 signedAtMs = signedAt,
-                token = token,
+                token = cachedToken ?: activeSharedToken,
                 nonce = nonce,
                 platform = OpenClawProtocol.PLATFORM,
                 deviceFamily = null,
@@ -389,9 +471,13 @@ class OpenClawNodeService(
         }
         val signer = signed.first
         val signature = signed.second
+        if (signature.isBlank()) {
+            failWithTransport("IDENTITY: unable to sign gateway challenge")
+            return
+        }
         val params = JsonObject().apply {
-            addProperty("minProtocol", OpenClawProtocol.PROTOCOL_VERSION)
-            addProperty("maxProtocol", OpenClawProtocol.PROTOCOL_VERSION)
+            addProperty("minProtocol", activeCompatibility.minProtocol)
+            addProperty("maxProtocol", activeCompatibility.maxProtocol)
             add("client", JsonObject().apply {
                 addProperty("id", OpenClawProtocol.CLIENT_ID)
                 addProperty("displayName", OpenClawProtocol.DISPLAY_NAME)
@@ -400,11 +486,14 @@ class OpenClawNodeService(
                 addProperty("platform", OpenClawProtocol.PLATFORM)
                 addProperty("modelIdentifier", clientInfo.modelIdentifier)
             })
-            addProperty("role", OpenClawProtocol.ROLE)
-            add("scopes", jsonArray(OpenClawProtocol.SCOPES))
+            addProperty("role", activeCompatibility.role)
+            add("scopes", jsonArray(activeCompatibility.scopes))
             add("caps", jsonArray(OpenClawProtocol.CAPS))
             add("commands", jsonArray(OpenClawProtocol.COMMANDS))
-            add("auth", JsonObject().apply { if (token != null) addProperty("token", token) })
+            add("auth", JsonObject().apply {
+                if (cachedToken != null) addProperty("deviceToken", cachedToken)
+                else activeSharedToken?.let { addProperty("token", it) }
+            })
             add("device", JsonObject().apply {
                 addProperty("id", signer.deviceId)
                 addProperty("publicKey", signer.publicKeyBase64Url)
@@ -417,20 +506,39 @@ class OpenClawNodeService(
         send(socket, request(id, "connect", params))
     }
 
-    private fun handleResponse(json: JsonObject) {
+    private fun handleResponse(socket: WebSocket, json: JsonObject) {
+        if (nodeChat?.handleResponse(json) == true) return
         val id = json.string("id")
-        val ok = json.get("ok")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
+        // Only this socket's outstanding connect may change authentication/pairing state.
+        if (id == null || id != pendingConnectId) return
+        val ok = json.get("ok")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: false
         if (ok) {
-            val isHello = synchronized(lock) { id != null && id == pendingConnectId }
-            if (isHello) handleHelloOk() else Log.d(TAG, "ok response for $id")
+            handleHelloOk(json.obj("payload"))
             return
         }
         val error = json.obj("error")
         val code = error?.string("code")
         val message = error?.string("message")
         Log.w(TAG, "error response for $id: $code $message")
-        if (code == OpenClawProtocol.ERROR_NOT_PAIRED) {
-            synchronized(lock) { _connectionState.value = OpenClawConnectionState.WaitingForPairing }
+        val details = error?.obj("details")
+        if (code == OpenClawProtocol.ERROR_NOT_PAIRED || details?.string("code") == "PAIRING_REQUIRED") {
+            shouldReconnect = false
+            pendingConnectId = null
+            handshakeJob?.cancel()
+            handshakeJob = null
+            pairingRequestId = details?.string("requestId")
+            webSocket = null
+            socket.close(1000, "awaiting pairing approval")
+            updateConnectionState(OpenClawConnectionState.WaitingForPairing)
+            return
+        }
+        if (code == "UNAVAILABLE" && details?.string("reason") == "startup-sidecars" &&
+            error?.get("retryable")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean == true
+        ) {
+            val retryAfter = error?.get("retryAfterMs")?.let { runCatching { it.asLong }.getOrNull() }
+                ?.coerceIn(0L, 30_000L) ?: 0L
+            handleDisconnect(socket, null, retryAfter)
+            socket.close(1000, "gateway starting")
             return
         }
         synchronized(lock) {
@@ -439,7 +547,7 @@ class OpenClawNodeService(
             // "Connecting..." forever (final review I3). Retrying would not help either — the token
             // or the protocol version is wrong — so the backoff is stopped as well.
             if (id != null && id == pendingConnectId) {
-                failWithTransport("${code ?: "?"}: ${message ?: ""}")
+                failWithTransport("${details?.string("code") ?: code ?: "?"}: ${message ?: ""}")
             }
         }
     }
@@ -457,19 +565,78 @@ class OpenClawNodeService(
         tickJob?.cancel()
         tickJob = null
         pendingConnectId = null
+        handshakeJob?.cancel()
+        handshakeJob = null
         val socket = webSocket
         webSocket = null
         runCatching { socket?.close(1000, "connect rejected") }
-        _connectionState.value = OpenClawConnectionState.Error(OpenClawErrorReason.Transport(detail))
+        updateConnectionState(OpenClawConnectionState.Error(OpenClawErrorReason.Transport(detail)))
     }
 
-    private fun handleHelloOk() {
+    /** Transport transitions invalidate chat subscriptions; a chat-only error leaves nodes live. */
+    private fun updateConnectionState(state: OpenClawConnectionState) {
+        nodeChat?.close()
+        nodeChat = null
+        _connectionState.value = state
+        _chatConnectionState.value = state
+    }
+
+    private fun handleHelloOk(payload: JsonObject?) {
         synchronized(lock) {
+            val protocol = payload?.get("protocol")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+                ?.let { runCatching { it.asBigDecimal.intValueExact() }.getOrNull() }
+            if (protocol == null || protocol !in activeCompatibility.minProtocol..activeCompatibility.maxProtocol ||
+                (!activeCompatibility.isLegacyCustom && payload?.string("type") != "hello-ok")
+            ) {
+                failWithTransport("PROTOCOL_MISMATCH: invalid hello or unsupported gateway protocol")
+                return
+            }
+            if (!activeCompatibility.isLegacyCustom) {
+                val auth = payload?.obj("auth")
+                val scopes = auth?.get("scopes")?.takeIf { it.isJsonArray }?.asJsonArray
+                if (auth?.string("role") != OpenClawProtocol.ROLE || scopes == null || scopes.size() != 0) {
+                    failWithTransport("AUTH_SCOPE_MISMATCH: expected node role with empty scopes")
+                    return
+                }
+                val token = auth?.string("deviceToken")?.takeIf { it.isNotBlank() }
+                if (token != null) {
+                    val saved = runCatching {
+                        store.saveDeviceToken(checkNotNull(activeEndpoint), checkNotNull(activeDeviceId), OpenClawProtocol.ROLE, token)
+                    }.isSuccess
+                    if (!saved) {
+                        failWithTransport("DEVICE_TOKEN_STORAGE: unable to persist paired node token")
+                        return
+                    }
+                }
+                // Additional bootstrap operator tokens are deliberately not consumed by this node.
+            }
             Log.d(TAG, "connected to gateway")
             reconnectAttempts = 0
             pendingConnectId = null
+            handshakeJob?.cancel()
+            handshakeJob = null
             _connectionState.value = OpenClawConnectionState.Connected
-            startTick()
+            if (activeCompatibility.isLegacyCustom) {
+                _chatConnectionState.value = OpenClawConnectionState.Connected
+                startTick()
+            } else {
+                val methods = payload?.obj("features")?.get("methods")?.takeIf { it.isJsonArray }?.asJsonArray
+                if (methods?.any { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString == "node.event" } != true) {
+                    _chatConnectionState.value = OpenClawConnectionState.Error(OpenClawErrorReason.Transport("CHAT_UNAVAILABLE: gateway does not advertise node.event"))
+                    return
+                }
+                val agentId = payload?.obj("snapshot")?.obj("sessionDefaults")?.string("defaultAgentId")
+                    ?.takeIf { it.isNotBlank() && ':' !in it } ?: "main"
+                val socket = checkNotNull(webSocket)
+                nodeChat = OpenClawNodeChat(
+                    lock, scope, "agent:$agentId:${OpenClawProtocol.SESSION_KEY}",
+                    send = { frame -> socket === webSocket && send(socket, frame) },
+                    emit = { _chatEvents.tryEmit(it) },
+                    onState = { _chatConnectionState.value = it },
+                    requestTimeoutMs = handshakeTimeoutMs,
+                    onBusy = { _isChatBusy.value = it },
+                ).also { it.start() }
+            }
         }
     }
 
@@ -485,10 +652,14 @@ class OpenClawNodeService(
         }
     }
 
-    private fun handleEvent(name: String, json: JsonObject) {
+    private fun handleEvent(socket: WebSocket, name: String, json: JsonObject) {
         when (name) {
             "chat" -> {
                 val payload = json.obj("payload") ?: return
+                if (!activeCompatibility.isLegacyCustom) {
+                    nodeChat?.handleChat(payload)
+                    return
+                }
                 val state = payload.string("state")
                 val content = payload.obj("message")?.get("content")?.takeIf { it.isJsonArray }?.asJsonArray
                 val text = content?.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject?.string("text") }
@@ -496,15 +667,15 @@ class OpenClawNodeService(
                 _chatEvents.tryEmit(OpenClawChatEvent(text, isFinal = state == "final"))
             }
             "node.invoke.request", "node.invoke" -> {
-                // The gateway puts the invoke in `params` (iOS reads json["params"]); accept
-                // `payload` as a fallback.
-                val params = json.obj("params") ?: json.obj("payload")
+                val params = if (activeCompatibility.isLegacyCustom) {
+                    json.obj("params") ?: json.obj("payload")
+                } else json.obj("payload")
                 val request = parseInvoke(params) // event form: the invoke id is params.id
                 if (request == null) {
-                    Log.w(TAG, "malformed invoke event: $json")
+                    Log.w(TAG, "ignoring malformed or misaddressed node invoke")
                     return
                 }
-                dispatchInvoke(request)
+                dispatchInvoke(socket, request)
             }
             "tick", "health" -> Unit
             else -> Log.d(TAG, "unhandled event: $name")
@@ -522,7 +693,7 @@ class OpenClawNodeService(
                 send(socket, errorResponse(id, OpenClawProtocol.ERROR_UNSUPPORTED, "Malformed node.invoke"))
                 return
             }
-            dispatchInvoke(request)
+            dispatchInvoke(socket, request)
             return
         }
         send(socket, errorResponse(id, OpenClawProtocol.ERROR_UNSUPPORTED, "Unknown method: $method"))
@@ -531,24 +702,42 @@ class OpenClawNodeService(
     /** @param forcedId the frame id for `req` frames (authoritative); null for the event form. */
     private fun parseInvoke(params: JsonObject?, forcedId: String? = null): OpenClawNodeInvokeRequest? {
         if (params == null) return null
+        if (!activeCompatibility.isLegacyCustom && params.string("nodeId") != activeDeviceId) return null
         val id = forcedId ?: params.string("id") ?: return null
         val command = params.string("command") ?: return null
-        val commandParams: JsonObject? = params.obj("params") ?: params.string("paramsjson")?.let { raw ->
-            runCatching { JsonParser.parseString(raw).asJsonObject }.getOrNull()
-        }
+        if (id.isBlank() || command.isBlank()) return null
+        val paramsKey = if (activeCompatibility.isLegacyCustom) "paramsjson" else "paramsJSON"
+        val rawElement = params.get(paramsKey)?.takeUnless { it.isJsonNull }
+        val rawParams = rawElement?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        val inlineParams = if (activeCompatibility.isLegacyCustom) params.obj("params") else null
+        val parsed = rawParams?.let { runCatching { JsonParser.parseString(it) }.getOrNull() }
+        val commandParams = inlineParams ?: parsed?.takeIf { it.isJsonObject }?.asJsonObject
+        // Malformed canonical parameters must never turn into a camera capture with defaults.
+        if (!activeCompatibility.isLegacyCustom && rawElement != null &&
+            (rawParams == null || parsed == null || (!parsed.isJsonNull && !parsed.isJsonObject))
+        ) return null
         val timeout = (params.get("timeoutMs") ?: params.get("timeoutms"))
             ?.takeIf { it.isJsonPrimitive }
             ?.let { runCatching { it.asLong }.getOrNull() }
         return OpenClawNodeInvokeRequest(id = id, command = command, params = commandParams, timeoutMs = timeout)
     }
 
-    private fun dispatchInvoke(request: OpenClawNodeInvokeRequest) {
+    private fun dispatchInvoke(socket: WebSocket, request: OpenClawNodeInvokeRequest) {
+        val responseNodeId = if (activeCompatibility.isLegacyCustom) clientInfo.nodeId else checkNotNull(activeDeviceId)
+        val legacy = activeCompatibility.isLegacyCustom
+        if (request.command !in OpenClawProtocol.COMMANDS) {
+            sendInvokeResult(socket, responseNodeId, legacy, OpenClawNodeInvokeResult.failure(
+                request.id, OpenClawProtocol.ERROR_UNKNOWN_COMMAND, "Command was not declared by this node",
+            ))
+            return
+        }
         val handler = router
         if (handler == null) {
-            sendInvokeResult(OpenClawNodeInvokeResult.failure(request.id, OpenClawProtocol.ERROR_NO_ROUTER, "No command router installed"))
+            sendInvokeResult(socket, responseNodeId, legacy, OpenClawNodeInvokeResult.failure(request.id, OpenClawProtocol.ERROR_NO_ROUTER, "No command router installed"))
             return
         }
         scope.launch {
+            if (synchronized(lock) { socket !== webSocket }) return@launch
             val budget = request.timeoutMs?.takeIf { it > 0 } ?: invokeTimeoutMs
             val result = withTimeoutOrNull(budget) {
                 try {
@@ -563,7 +752,7 @@ class OpenClawNodeService(
                     OpenClawNodeInvokeResult.failure(request.id, OpenClawProtocol.ERROR_INTERNAL, e.message ?: "internal error")
                 }
             } ?: OpenClawNodeInvokeResult.failure(request.id, OpenClawProtocol.ERROR_TIMEOUT, "Command timed out after ${budget}ms")
-            sendInvokeResult(result)
+            sendInvokeResult(socket, responseNodeId, legacy, result)
         }
     }
 
@@ -571,30 +760,34 @@ class OpenClawNodeService(
 
     /** `chat.send`; [imageJpegBase64] is a base64 (no line breaks) JPEG attachment. */
     fun sendChatMessage(text: String, imageJpegBase64: String? = null): Boolean {
-        val params = JsonObject().apply {
-            addProperty("sessionKey", OpenClawProtocol.SESSION_KEY)
-            addProperty("message", text)
-            addProperty("idempotencyKey", UUID.randomUUID().toString())
-            if (imageJpegBase64 != null) {
-                add("attachments", JsonArray().apply {
-                    add(JsonObject().apply {
-                        addProperty("type", "image")
-                        addProperty("mimeType", "image/jpeg")
-                        addProperty("content", imageJpegBase64)
+        synchronized(lock) {
+            if (_chatConnectionState.value != OpenClawConnectionState.Connected) return false
+            if (!activeCompatibility.isLegacyCustom) return nodeChat?.sendMessage(text, imageJpegBase64) ?: false
+            val params = JsonObject().apply {
+                addProperty("sessionKey", OpenClawProtocol.SESSION_KEY)
+                addProperty("message", text)
+                addProperty("idempotencyKey", UUID.randomUUID().toString())
+                if (imageJpegBase64 != null) {
+                    add("attachments", JsonArray().apply {
+                        add(JsonObject().apply {
+                            addProperty("type", "image")
+                            addProperty("mimeType", "image/jpeg")
+                            addProperty("content", imageJpegBase64)
+                        })
                     })
-                })
+                }
             }
+            return sendJson(request(UUID.randomUUID().toString(), "chat.send", params))
         }
-        return sendJson(request(UUID.randomUUID().toString(), "chat.send", params))
     }
 
-    private fun sendInvokeResult(result: OpenClawNodeInvokeResult) {
+    private fun sendInvokeResult(socket: WebSocket, responseNodeId: String, legacy: Boolean, result: OpenClawNodeInvokeResult) {
         val params = JsonObject().apply {
             addProperty("id", result.id)
-            addProperty("nodeId", clientInfo.nodeId)
+            addProperty("nodeId", responseNodeId)
             addProperty("ok", result.ok)
             // Large payloads (JPEG) travel as a JSON *string* — identical to iOS.
-            result.payload?.let { addProperty("payloadjson", gson.toJson(it)) }
+            result.payload?.let { addProperty(if (legacy) "payloadjson" else "payloadJSON", gson.toJson(it)) }
             result.error?.let { error ->
                 add("error", JsonObject().apply {
                     error.code?.let { addProperty("code", it) }
@@ -602,7 +795,11 @@ class OpenClawNodeService(
                 })
             }
         }
-        sendJson(request(UUID.randomUUID().toString(), "node.invoke.result", params))
+        synchronized(lock) {
+            if (socket === webSocket && _connectionState.value == OpenClawConnectionState.Connected) {
+                send(socket, request(UUID.randomUUID().toString(), "node.invoke.result", params))
+            }
+        }
     }
 
     private fun request(id: String, method: String, params: JsonObject): JsonObject = JsonObject().apply {

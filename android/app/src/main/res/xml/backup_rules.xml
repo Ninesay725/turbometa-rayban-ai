@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Keystore-bound credentials cannot be restored on another installation. -->
+    <exclude domain="sharedpref" path="assistant_credentials.xml" />
+    <exclude domain="sharedpref" path="turbometa_secure_prefs.xml" />
+    <exclude domain="sharedpref" path="openclaw_protocol.xml" />
+</full-backup-content>

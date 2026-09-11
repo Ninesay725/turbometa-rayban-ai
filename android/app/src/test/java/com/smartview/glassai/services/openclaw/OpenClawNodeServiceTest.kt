@@ -80,6 +80,8 @@ class OpenClawNodeServiceTest {
 
     @Before
     fun setUp() {
+        // These tests retain the shipped custom iOS-port contract behind explicit opt-in.
+        store.compatibility = OpenClawCompatibility.LEGACY_CUSTOM_V3
         store.host = "127.0.0.1"
         store.scheme = "ws"
         store.saveToken("secret-token")
@@ -485,6 +487,8 @@ class OpenClawNodeServiceTest {
         assertEquals(Proxy.NO_PROXY, client.proxy)
         assertEquals(10_000, client.connectTimeoutMillis)
         assertEquals(0, client.readTimeoutMillis)
+        assertFalse(client.followRedirects)
+        assertFalse(client.followSslRedirects)
         // Final review I5: without a ping the socket stays half-open when the phone roams off
         // Wi-Fi and the UI shows Connected for minutes. A missing pong fails the socket instead.
         assertEquals(20_000, client.pingIntervalMillis)

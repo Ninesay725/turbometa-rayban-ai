@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="bridge_ai_media_apps_description">Default packages are for QQ Music, NetEase Cloud Music, and Qishui. Available controls depend on the music app.</string>
+    <string name="bridge_ai_notifications_enabled">Allow assistant notification access</string>
+    <string name="bridge_ai_notifications_description">Off by default. Allow the assistant to read new notifications from selected apps when explicitly requested. This is separate from WeChat previews on glasses. Up to 20 notifications stay in memory; an assistant request may send their contents to your configured AI provider.</string>
+    <string name="bridge_ai_notification_packages">Apps available to the assistant</string>
+    <string name="bridge_ai_notification_packages_hint">One exact package name per line. An empty list allows no apps.</string>
+</resources>

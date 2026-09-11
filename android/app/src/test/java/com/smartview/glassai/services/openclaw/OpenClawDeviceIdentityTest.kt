@@ -45,7 +45,7 @@ class OpenClawDeviceIdentityTest {
     }
 
     @Test
-    fun signatureStringMatchesTheIosLayout() {
+    fun protocolFourStillUsesV3SignaturePayload() {
         val identity = OpenClawDeviceIdentity.fromSeed(rfcSeed)
         val payload = OpenClawDeviceIdentity.buildSignaturePayload(
             deviceId = identity.deviceId,
@@ -60,7 +60,7 @@ class OpenClawDeviceIdentityTest {
             deviceFamily = null,
         )
         assertEquals(
-            "v3|${identity.deviceId}|openclaw-android|node|operator|operator.read,operator.write|1711700000000|abc|n1|android|",
+            "v3|${identity.deviceId}|openclaw-android|node|node||1711700000000|abc|n1|android|",
             payload,
         )
     }
@@ -72,13 +72,14 @@ class OpenClawDeviceIdentityTest {
             scopes = listOf("a", "b"), signedAtMs = 1L, token = null, nonce = "n",
             platform = "android", deviceFamily = "Pixel 5",
         )
-        assertEquals("v3|d|c|node|operator|a,b|1||n|android|pixel5", payload)
+        assertEquals("v3|d|c|node|operator|a,b|1||n|android|pixel 5", payload)
     }
 
     @Test
-    fun normalizeForAuthTrimsLowercasesAndStripsPunctuation() {
+    fun normalizeForAuthTrimsAndLowercasesOnlyAsciiPreservingPunctuationAndUnicode() {
         assertEquals("android", OpenClawDeviceIdentity.normalizeForAuth("  Android "))
-        assertEquals("ray-ban_meta.v2", OpenClawDeviceIdentity.normalizeForAuth("Ray-Ban_Meta.v2!"))
+        assertEquals("ray-ban_meta.v2!", OpenClawDeviceIdentity.normalizeForAuth("Ray-Ban_Meta.v2!"))
+        assertEquals("İ phone É", OpenClawDeviceIdentity.normalizeForAuth("\uFEFFİ PHONE É\u00A0"))
         assertEquals("", OpenClawDeviceIdentity.normalizeForAuth(null))
         assertEquals("", OpenClawDeviceIdentity.normalizeForAuth("   "))
     }
@@ -106,6 +107,18 @@ class OpenClawDeviceIdentityTest {
         Ed25519Verify(identity.publicKey).verify(
             Base64.getUrlDecoder().decode(signature),
             payload.toByteArray(Charsets.UTF_8),
+        )
+    }
+
+    /** Independently generated with Node's Ed25519 implementation (stub gateway oracle). */
+    @Test
+    fun nodeConnectSignatureMatchesIndependentGoldenVector() {
+        val identity = OpenClawDeviceIdentity.fromSeed(ByteArray(32) { 7 })
+        assertEquals("fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889", identity.deviceId)
+        assertEquals(
+            "UxqY5q2ZhE02fZWXIcE_uktLFXFW8ueXYQsbq7agWVQaNe7GtYZG3u2-nhODfUqp3kcy2sRZSMtlGI2RSOVaBQ",
+            identity.signConnect("openclaw-android", "node", "node", emptyList(), 1711700000000L,
+                "shared-token", "nonce-1", "android", null),
         )
     }
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="bridge_ai_media_apps_description">默认包名对应 QQ 音乐、网易云音乐和汽水音乐。可用的控制功能取决于音乐应用。</string>
+    <string name="bridge_ai_notifications_enabled">允许助手读取通知</string>
+    <string name="bridge_ai_notifications_description">默认关闭。明确请求时，允许助手读取所选应用的新通知；与眼镜上的微信预览设置相互独立。内存中最多保留 20 条通知；助手请求可能会将通知内容发送给你配置的 AI 服务商。</string>
+    <string name="bridge_ai_notification_packages">助手可读取通知的应用</string>
+    <string name="bridge_ai_notification_packages_hint">每行填写一个完整包名。列表为空时不允许读取任何应用的通知。</string>
+</resources>

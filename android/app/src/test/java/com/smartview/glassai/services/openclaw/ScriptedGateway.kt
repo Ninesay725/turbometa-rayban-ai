@@ -17,13 +17,16 @@ import okio.ByteString.Companion.encodeUtf8
  * connect.challenge on open and answers the `connect` request per [connectReply]. Every frame the
  * app sends is parsed and queued in [received]; the latest server-side socket is in [socket].
  */
-class ScriptedGateway(val nonce: String = "nonce-1") {
+class ScriptedGateway(@Volatile var nonce: String = "nonce-1") {
     enum class ConnectReply { OK, NOT_PAIRED, REJECT, SILENT }
 
     val server = MockWebServer()
     val received = LinkedBlockingQueue<JsonObject>()
     @Volatile var socket: WebSocket? = null
     @Volatile var connectReply: ConnectReply = ConnectReply.OK
+    @Volatile var protocolVersion: Int = 3
+    @Volatile var helloAuth: JsonObject? = null
+    @Volatile var nodeEventReply: ConnectReply = ConnectReply.OK
     /** Error code answered for [ConnectReply.REJECT] (anything but NOT_PAIRED). */
     @Volatile var rejectCode: String = "UNAUTHORIZED"
     @Volatile var rejectMessage: String = "bad token"
@@ -49,7 +52,20 @@ class ScriptedGateway(val nonce: String = "nonce-1") {
             if (json.get("type")?.asString == "req" && json.get("method")?.asString == "connect") {
                 val id = json.get("id").asString
                 when (connectReply) {
-                    ConnectReply.OK -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"protocol":3}}""")
+                    ConnectReply.OK -> webSocket.send(JsonObject().apply {
+                        addProperty("type", "res")
+                        addProperty("id", id)
+                        addProperty("ok", true)
+                        add("payload", JsonObject().apply {
+                            addProperty("type", "hello-ok")
+                            addProperty("protocol", protocolVersion)
+                            add("server", JsonParser.parseString("""{"version":"2026.9.4","connId":"test"}"""))
+                            add("features", JsonParser.parseString("""{"methods":["node.invoke.result","node.event"],"events":["tick","node.invoke.request","chat"]}"""))
+                            add("snapshot", JsonParser.parseString("""{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0}"""))
+                            add("policy", JsonParser.parseString("""{"maxPayload":26214400,"maxBufferedBytes":52428800,"tickIntervalMs":30000}"""))
+                            helloAuth?.let { add("auth", it) }
+                        })
+                    }.toString())
                     ConnectReply.NOT_PAIRED -> webSocket.send(
                         """{"type":"res","id":"$id","ok":false,"error":{"code":"NOT_PAIRED","message":"device not paired"}}"""
                     )
@@ -57,6 +73,13 @@ class ScriptedGateway(val nonce: String = "nonce-1") {
                         """{"type":"res","id":"$id","ok":false,"error":{"code":"$rejectCode","message":"$rejectMessage"}}"""
                     )
                     ConnectReply.SILENT -> Unit
+                }
+            } else if (json.get("method")?.asString == "node.event") {
+                val id = json.get("id").asString
+                when (nodeEventReply) {
+                    ConnectReply.OK -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"ok":true}}""")
+                    ConnectReply.SILENT -> Unit
+                    else -> webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"chat unavailable"}}""")
                 }
             }
         }

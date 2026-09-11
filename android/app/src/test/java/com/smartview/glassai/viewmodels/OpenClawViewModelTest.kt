@@ -3,6 +3,7 @@ package com.smartview.glassai.viewmodels
 import android.app.Application
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModelStore
+import com.google.gson.JsonParser
 import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamState
@@ -36,8 +37,10 @@ import com.smartview.glassai.services.SpeechRecognizerSession
 import com.smartview.glassai.services.openclaw.InMemoryOpenClawSettingsStore
 import com.smartview.glassai.services.openclaw.OpenClawChatMessage
 import com.smartview.glassai.services.openclaw.OpenClawClientInfo
+import com.smartview.glassai.services.openclaw.OpenClawConnectionState
 import com.smartview.glassai.services.openclaw.OpenClawDeviceIdentity
 import com.smartview.glassai.services.openclaw.OpenClawNodeService
+import com.smartview.glassai.services.openclaw.ScriptedGateway
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,11 +51,14 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -68,11 +74,15 @@ class OpenClawViewModelTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
     private val store = InMemoryOpenClawSettingsStore()
+    private val client = OkHttpClient()
+    private val gateway = ScriptedGateway()
+    private var gatewayStarted = false
+    private var chatSessionKey = ""
     private val service = OpenClawNodeService(
         store = store,
         identity = lazyOf(OpenClawDeviceIdentity.fromSeed(ByteArray(32) { 3 })),
         clientInfo = OpenClawClientInfo("2.0.0", "test", "rayban-test0001"),
-        httpClient = OkHttpClient(),
+        httpClient = client,
     )
     private val factory = FakeDatSessionFactory()
     private val observer = FakeDatDeviceObserver()
@@ -86,11 +96,15 @@ class OpenClawViewModelTest {
     private class FakeFrames : GlassesFrameProvider {
         var result: SnapshotResult = SnapshotResult.NoFrame
         var pending: CompletableDeferred<SnapshotResult>? = null
+        var calls = 0
         override suspend fun awaitActiveDevice(timeoutMs: Long): Boolean = true
         override val isStreaming = false
         override val streamStatus = "stopped"
         override val hasFrame = false
-        override suspend fun snapshot(maxWidth: Int, quality: Double, timeoutMs: Long): SnapshotResult = pending?.await() ?: result
+        override suspend fun snapshot(maxWidth: Int, quality: Double, timeoutMs: Long): SnapshotResult {
+            calls++
+            return pending?.await() ?: result
+        }
     }
 
     /** Scriptable recognizer: the test fires the callbacks FunASRService would. */
@@ -138,9 +152,33 @@ class OpenClawViewModelTest {
     @After
     fun tearDown() {
         viewModels.clear()
+        service.disconnect()
+        if (gatewayStarted) gateway.stop()
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
         manager.resetForTests()
         managerScope.cancel()
         Dispatchers.resetMain()
+    }
+
+    /** Use the production CURRENT handshake and subscription before expecting a sent bubble. */
+    private fun connectGateway() {
+        gateway.protocolVersion = 4
+        gateway.helloAuth = JsonParser.parseString("""{"role":"node","scopes":[]}""").asJsonObject
+        gateway.start()
+        gatewayStarted = true
+        store.host = "127.0.0.1"
+        store.port = gateway.server.port
+        store.saveToken("fixture-shared-token")
+        service.connect()
+        runBlocking { withTimeout(5_000) { service.connectionState.first { it == OpenClawConnectionState.Connected } } }
+        val subscription = gateway.awaitMethod("node.event").getAsJsonObject("params")
+        chatSessionKey = JsonParser.parseString(subscription.get("payloadJSON").asString).asJsonObject.get("sessionKey").asString
+    }
+
+    private fun finishReply(vm: OpenClawViewModel, text: String = "Done") {
+        gateway.send("""{"type":"event","event":"chat","payload":{"sessionKey":"$chatSessionKey","runId":"fixture-run","seq":1,"state":"final","message":{"content":[{"type":"text","text":"$text"}]}}}""")
+        runBlocking { withTimeout(5_000) { vm.messages.first { it.lastOrNull()?.text == text } } }
     }
 
     private fun newViewModel(
@@ -148,6 +186,7 @@ class OpenClawViewModelTest {
         frameProvider: GlassesFrameProvider = frames,
         registry: GlassesControllerRegistry = controllers,
         ownerStore: ViewModelStore = viewModels,
+        imageDecoder: (ByteArray) -> Bitmap? = { TestBitmaps.stub() },
     ) = OpenClawViewModel(
         application = Application(),
         service = service,
@@ -161,7 +200,7 @@ class OpenClawViewModelTest {
         alibabaEndpoint = { AlibabaEndpoint.BEIJING },
         audioRoute = audioRoute,
         strings = ::str,
-        decodeImage = { TestBitmaps.stub() },
+        decodeImage = imageDecoder,
         sink = sink,
         controllers = registry,
         decodeDispatcher = dispatcher, // keeps withContext(decodeDispatcher) on the test scheduler
@@ -185,6 +224,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun sendTextAppendsUserBubbleFlushesPendingAndClearsInput() {
+        connectGateway()
         val vm = newViewModel()
         vm.onChatEvent("partial", isFinal = false)
         vm.onInputChanged("  hi  ")
@@ -199,6 +239,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun snapWithoutFrameShowsTheNoFrameBubble() {
+        connectGateway()
         val vm = newViewModel()
         frames.result = SnapshotResult.NoFrame
 
@@ -212,6 +253,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun snapWithFrameAppendsUserBubbleWithImageAndPrompt() {
+        connectGateway()
         val vm = newViewModel()
         frames.result = SnapshotResult.Ok(FrameSnapshot(byteArrayOf(1, 2, 3), 4, 3))
 
@@ -236,6 +278,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun voiceFlowAccumulatesFinalSentencesAndSendsThem() {
+        connectGateway()
         val vm = newViewModel()
         vm.startListening()
         assertTrue(vm.isListening.value)
@@ -308,9 +351,7 @@ class OpenClawViewModelTest {
     }
 
     @Test
-    fun sendingIsGatedOnConnectedSoAPreHelloSocketNeverSeesChatSend() {
-        // OpenClawNodeService.sendChatMessage() answers true for any live socket, including one
-        // that has not completed the hello — the ViewModel is the gate (Task 3 report, known gap).
+    fun disconnectedSendsKeepDraftsAndDoNotCreateBubblesOrCapture() {
         val vm = newViewModel()
         vm.onInputChanged("hi")
         vm.sendText()
@@ -320,9 +361,120 @@ class OpenClawViewModelTest {
         frames.result = SnapshotResult.Ok(FrameSnapshot(byteArrayOf(1, 2, 3), 4, 3))
         vm.snapAndSend()
 
-        // The bubbles are local and always appended; only the wire sends are suppressed.
-        assertEquals(listOf("hi", "voice", str(R.string.openclaw_chat_photoprompt)), vm.messages.value.map { it.text })
-        assertEquals(3, vm.suppressedSends)
+        assertTrue(vm.messages.value.isEmpty())
+        assertEquals("hi", vm.inputText.value)
+        assertEquals("voice", vm.asrText.value)
+        assertEquals(0, frames.calls)
+        assertFalse(vm.isSending.value)
+        assertTrue(sink.shown.isEmpty())
+    }
+
+    @Test
+    fun currentChatBusyBlocksTextVoiceAndCameraUntilActualFinalReply() {
+        connectGateway()
+        val vm = newViewModel()
+        vm.enterScreen()
+        vm.startListening()
+        asr.onFinalResult!!("voice draft")
+        asr.onPartialResult!!(" tail")
+        vm.stopListening()
+        vm.onInputChanged("first")
+        vm.sendText()
+        val request = gateway.awaitMethod("node.event").getAsJsonObject("params")
+        assertEquals("agent.request", request.get("event").asString)
+        assertEquals("first", JsonParser.parseString(request.get("payloadJSON").asString).asJsonObject.get("message").asString)
+        assertTrue(vm.isChatBusy.value)
+        assertFalse(vm.isSending.value) // Busy remains after submission/capture work ends.
+
+        vm.onInputChanged("  next draft  ")
+        vm.sendText()
+        vm.sendAsrText()
+        vm.snapAndSend()
+        controllers.openClaw!!.snapAndSend()
+        vm.startListening() // a late microphone permission callback must not erase the draft
+
+        assertEquals(listOf("first"), vm.messages.value.map { it.text })
+        assertEquals("  next draft  ", vm.inputText.value)
+        assertEquals("voice draft", vm.asrText.value)
+        assertEquals(" tail", vm.asrPartial.value)
+        assertEquals(0, frames.calls)
+        assertEquals(1, asr.startCalls)
+        assertTrue(gateway.received.isEmpty())
+        assertEquals(1, sink.shown.size)
+
+        finishReply(vm)
+        assertFalse(vm.isChatBusy.value)
+        assertEquals(listOf("first", "Done"), vm.messages.value.map { it.text })
+        vm.sendAsrText()
+        assertEquals("", vm.asrText.value)
+        assertEquals("", vm.asrPartial.value)
+        assertEquals("voice draft tail", vm.messages.value.last().text)
+        assertTrue(vm.isChatBusy.value)
+        assertEquals("  next draft  ", vm.inputText.value)
+    }
+
+    @Test
+    fun serviceRejectedOversizedSendKeepsTypedAndVoiceDraftsWithoutGhostBubbles() {
+        connectGateway()
+        val vm = newViewModel()
+        vm.enterScreen()
+        vm.onChatEvent("existing partial", isFinal = false)
+        val tooLong = "x".repeat(20_001)
+        vm.onInputChanged("  $tooLong  ")
+        vm.sendText() // Connected and idle: rejection comes from the real service, not the VM gate.
+        vm.startListening()
+        asr.onFinalResult!!(tooLong)
+        vm.stopListening()
+        vm.sendAsrText()
+
+        assertEquals("  $tooLong  ", vm.inputText.value)
+        assertEquals(tooLong, vm.asrText.value)
+        assertEquals("existing partial", vm.pendingResponse.value)
+        assertTrue(vm.messages.value.isEmpty())
+        assertFalse(vm.isChatBusy.value)
+        assertEquals(listOf(DisplayCard.OpenClaw(null, "existing partial", false)), sink.shown)
+        assertTrue(gateway.received.isEmpty())
+    }
+
+    @Test
+    fun lateCameraCompletionRechecksServiceBusyAndKeepsItsDraft() {
+        connectGateway()
+        val vm = newViewModel()
+        vm.enterScreen()
+        vm.onInputChanged("camera draft")
+        frames.pending = CompletableDeferred()
+        vm.snapAndSend()
+        assertTrue(vm.isSending.value)
+        vm.sendText()
+        assertEquals("camera draft", vm.inputText.value)
+        assertTrue(vm.messages.value.isEmpty())
+        assertTrue(gateway.received.isEmpty())
+        // Another caller can claim the service while capture is suspended.
+        assertTrue(service.sendChatMessage("other caller"))
+        gateway.awaitMethod("node.event")
+        frames.pending!!.complete(SnapshotResult.Ok(FrameSnapshot(byteArrayOf(1, 2, 3), 4, 3)))
+
+        assertFalse(vm.isSending.value)
+        assertTrue(vm.isChatBusy.value)
+        assertEquals("camera draft", vm.inputText.value)
+        assertTrue(vm.messages.value.isEmpty())
+        assertTrue(sink.shown.isEmpty())
+        assertTrue(gateway.received.isEmpty())
+    }
+
+    @Test
+    fun cameraDecodeThatLosesItsConnectionKeepsDraftAndCreatesNoBubble() {
+        connectGateway()
+        val vm = newViewModel(imageDecoder = { service.disconnect(); TestBitmaps.stub() })
+        vm.enterScreen()
+        vm.onInputChanged("camera draft")
+        frames.result = SnapshotResult.Ok(FrameSnapshot(byteArrayOf(1, 2, 3), 4, 3))
+        vm.snapAndSend()
+
+        assertFalse(vm.isSending.value)
+        assertEquals("camera draft", vm.inputText.value)
+        assertTrue(vm.messages.value.isEmpty())
+        assertTrue(sink.shown.isEmpty())
     }
 
     @Test
@@ -460,6 +612,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun sendAsrTextClearsTheAsrError() {
+        connectGateway()
         val vm = newViewModel()
         vm.startListening()
         asr.onFinalResult!!("hello")
@@ -560,6 +713,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun chatDeltaShowsAPendingOpenClawCard() {
+        connectGateway()
         val vm = newViewModel()
         vm.enterScreen()
         vm.onInputChanged("What is this?")
@@ -580,6 +734,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun sendTextShowsTheUserTextWithAnEmptyReply() {
+        connectGateway()
         val vm = newViewModel()
         vm.enterScreen()
         vm.onInputChanged("  hello  ")
@@ -589,6 +744,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun sendAsrTextShowsTheRecognizedTextAndAssociatesTheReply() {
+        connectGateway()
         val vm = newViewModel()
         vm.enterScreen()
         vm.startListening()
@@ -618,6 +774,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun controllerIsRegisteredAndSnapForwardsToSnapAndSend() {
+        connectGateway()
         val vm = newViewModel()
         vm.enterScreen()
         frames.pending = CompletableDeferred()
@@ -653,6 +810,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun snapTapNavigatesAfterLeavingAndSnapsAgainAfterReentry() {
+        connectGateway()
         val navigation = MutableSharedFlow<NavigationRequest>(extraBufferCapacity = 4)
         val requests = mutableListOf<NavigationRequest>()
         managerScope.launch { navigation.collect { requests += it } }
@@ -677,6 +835,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun leavingAndClearingAnOlderViewModelKeepsTheNewController() {
+        connectGateway()
         val navigation = MutableSharedFlow<NavigationRequest>(extraBufferCapacity = 4)
         val requests = mutableListOf<NavigationRequest>()
         managerScope.launch { navigation.collect { requests += it } }
@@ -711,6 +870,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun snapCompletionFromThePreviousEntryCannotRestoreItsCard() {
+        connectGateway()
         val vm = newViewModel()
         vm.enterScreen()
         frames.pending = CompletableDeferred()
@@ -731,6 +891,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun leavingCancelsASnapWithoutLettingItsLateCompletionClearTheNextSnapBusyFlag() {
+        connectGateway()
         val first = CompletableDeferred<SnapshotResult>()
         val second = CompletableDeferred<SnapshotResult>()
         var calls = 0
@@ -771,6 +932,7 @@ class OpenClawViewModelTest {
 
     @Test
     fun realProviderSnapBorrowsCameraWhileChatKeepsSessionAndDisplayAlive() {
+        connectGateway()
         observer.device.value = GlassesDeviceInfo(
             "display-1", "Display glasses", DeviceType.RAYBAN_META, true, DeviceCompatibility.COMPATIBLE,
         )

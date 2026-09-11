@@ -46,7 +46,8 @@ class MediaBridgeInstrumentedTest {
             assertTrue(restored.musicEnabled)
             assertFalse(restored.wechatEnabled)
             assertEquals(setOf("com.example.music"), restored.mediaPackages)
-            assertEquals(setOf("music_enabled", "media_packages"), context.getSharedPreferences(name, 0).all.keys)
+            assertEquals(setOf("music_enabled", "media_packages", "media_packages_customized"),
+                context.getSharedPreferences(name, 0).all.keys)
         } finally { context.deleteSharedPreferences(name) }
     }
 
@@ -67,19 +68,21 @@ class MediaBridgeInstrumentedTest {
         assumeTrue("Notification listener access must be granted by the emulator runner", NotificationBridgeRuntime.hasNotificationAccess(context))
         val preferences = BridgePreferences.getInstance(context)
         val saved = preferences.settings.value
-        val pause = CountDownLatch(1); val next = CountDownLatch(1); val previous = CountDownLatch(1)
+        val play = CountDownLatch(1)
+        val pause = CountDownLatch(2); val next = CountDownLatch(2); val previous = CountDownLatch(2)
         val session = MediaSession(context, "phase-e-test-only")
         try {
             instrumentation.runOnMainSync {
                 NotificationListenerService.requestRebind(ComponentName(context, NotificationBridgeService::class.java))
                 session.setCallback(object : MediaSession.Callback() {
+                    override fun onPlay() { play.countDown() }
                     override fun onPause() { pause.countDown() }
                     override fun onSkipToNext() { next.countDown() }
                     override fun onSkipToPrevious() { previous.countDown() }
                 }, Handler(Looper.getMainLooper()))
                 session.setMetadata(MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, "Bridge fixture")
                     .putString(MediaMetadata.METADATA_KEY_ARTIST, "Test artist").build())
-                session.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PAUSE or
+                session.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
                     PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS)
                     .setState(PlaybackState.STATE_PLAYING, 0, 1f).build())
                 session.isActive = true
@@ -90,11 +93,26 @@ class MediaBridgeInstrumentedTest {
             assertEquals(context.packageName, track.packageName); assertTrue(track.isPlaying)
             instrumentation.runOnMainSync {
                 NotificationBridgeRuntime.playPause(); NotificationBridgeRuntime.next(); NotificationBridgeRuntime.previous()
+                listOf("play", "pause", "next", "previous").forEach { action ->
+                    assertEquals("Music command sent.", NotificationBridgeRuntime.controlForAssistant(action, context.packageName))
+                }
+                assertThrows(IllegalStateException::class.java) {
+                    NotificationBridgeRuntime.controlForAssistant("play", "not.allowed")
+                }
             }
+            assertTrue(play.await(3, TimeUnit.SECONDS))
             assertTrue(pause.await(3, TimeUnit.SECONDS))
             assertTrue(next.await(3, TimeUnit.SECONDS))
             assertTrue(previous.await(3, TimeUnit.SECONDS))
-            instrumentation.runOnMainSync { preferences.setMusicEnabled(false) }
+            instrumentation.runOnMainSync {
+                session.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PAUSE)
+                    .setState(PlaybackState.STATE_PLAYING, 0, 1f).build())
+                assertThrows(IllegalStateException::class.java) {
+                    NotificationBridgeRuntime.controlForAssistant("next", context.packageName)
+                }
+                preferences.setMusicEnabled(false)
+                assertThrows(IllegalStateException::class.java) { NotificationBridgeRuntime.controlForAssistant("play") }
+            }
             withTimeout(3_000) { NotificationBridgeRuntime.music.first { it == null } }
         } finally {
             instrumentation.runOnMainSync {

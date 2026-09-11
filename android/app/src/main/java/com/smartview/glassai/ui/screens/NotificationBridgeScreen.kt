@@ -202,7 +202,7 @@ fun NotificationBridgeScreen(onBackClick: () -> Unit) {
             }
             item {
                 BridgeSection(stringResource(R.string.bridge_media_apps)) {
-                    Text(stringResource(R.string.bridge_media_apps_description))
+                    Text(stringResource(R.string.bridge_ai_media_apps_description))
                     OutlinedTextField(
                         value = packagesDraft,
                         onValueChange = { packagesDraft = it },

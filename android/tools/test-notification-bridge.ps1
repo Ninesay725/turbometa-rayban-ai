@@ -1,6 +1,7 @@
 param(
     [string]$Serial = 'emulator-5554',
     [switch]$AllTests,
+    [string]$Classes = '',
     [string]$Adb = "$env:LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe",
     [string]$Output = "$PSScriptRoot/../../docs/superpowers/reviews/phase-e/bridge-instrumentation.txt"
 )
@@ -27,9 +28,10 @@ try {
         & $Adb -s $Serial shell cmd notification allow_listener $component
         if ($LASTEXITCODE -ne 0) { throw 'Cannot grant test listener access.' }
     }
-    $classes = 'com.smartview.glassai.bridge.MediaBridgeInstrumentedTest,com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest,com.smartview.glassai.glasses.DisplayImageInstrumentedTest'
+    $defaultClasses = 'com.smartview.glassai.bridge.MediaBridgeInstrumentedTest,com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest,com.smartview.glassai.glasses.DisplayImageInstrumentedTest'
     $testArgs = @('-s', $Serial, 'shell', 'am', 'instrument', '-w', '-r')
-    if (-not $AllTests) { $testArgs += @('-e', 'class', $classes) }
+    if ($Classes) { $testArgs += @('-e', 'class', $Classes) }
+    elseif (-not $AllTests) { $testArgs += @('-e', 'class', $defaultClasses) }
     $testArgs += 'com.smartview.glassai.test/androidx.test.runner.AndroidJUnitRunner'
     $result = & $Adb @testArgs 2>&1
     $text = $result -join "`n"

@@ -51,6 +51,8 @@ sealed class Screen(val route: String) {
     object NotificationBridge : Screen("notification_bridge")
     object LiveTranslate : Screen("live_translate")
     object LiveTranslateSettings : Screen("live_translate_settings")
+    object Assistant : Screen("custom_assistant")
+    object AssistantSettings : Screen("custom_assistant_settings")
 }
 
 sealed class BottomNavItem(
@@ -174,7 +176,8 @@ fun TurboMetaNavigation(
                     onNavigateToNotificationBridge = {
                         navController.navigate(Screen.NotificationBridge.route) { launchSingleTop = true }
                     },
-                    onNavigateToTranslate = { navController.navigate(Screen.LiveTranslate.route) }
+                    onNavigateToTranslate = { navController.navigate(Screen.LiveTranslate.route) },
+                    onNavigateToAssistant = { navController.navigate(Screen.Assistant.route) }
                 )
             }
 
@@ -241,12 +244,29 @@ fun TurboMetaNavigation(
                     onNavigateToNotificationBridge = {
                         navController.navigate(Screen.NotificationBridge.route) { launchSingleTop = true }
                     },
-                    onNavigateToTranslateSettings = { navController.navigate(Screen.LiveTranslateSettings.route) }
+                    onNavigateToTranslateSettings = { navController.navigate(Screen.LiveTranslateSettings.route) },
+                    onNavigateToAssistantSettings = { navController.navigate(Screen.AssistantSettings.route) }
                 )
             }
 
             composable(Screen.NotificationBridge.route) {
                 NotificationBridgeScreen(onBackClick = { navController.popBackStack() })
+            }
+
+            composable(Screen.Assistant.route) {
+                AssistantScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onSettingsClick = { navController.navigate(Screen.AssistantSettings.route) },
+                    onNotificationSettingsClick = { navController.navigate(Screen.AssistantSettings.route) },
+                    onRequestWearablesPermission = onRequestWearablesPermission,
+                )
+            }
+
+            composable(Screen.AssistantSettings.route) {
+                AssistantSettingsScreen(
+                    onBackClick = { navController.popBackStack() },
+                    onNotificationSettingsClick = { navController.navigate(Screen.NotificationBridge.route) },
+                )
             }
 
             composable(Screen.LiveTranslate.route) {

@@ -4,15 +4,15 @@ import android.graphics.Bitmap
 import com.google.gson.JsonObject
 import java.util.UUID
 
-/** Wire-protocol constants. Field names and values must stay identical to iOS (research §8.6). */
+/** Wire contract verified against openclaw/openclaw v2026.9.4. */
 object OpenClawProtocol {
-    const val PROTOCOL_VERSION = 3
+    const val PROTOCOL_VERSION = 4
     const val CLIENT_ID = "openclaw-android"
     const val CLIENT_MODE = "node"
     const val PLATFORM = "android"
     const val DISPLAY_NAME = "Ray-Ban Meta Glasses"
-    const val ROLE = "operator"
-    val SCOPES: List<String> = listOf("operator.read", "operator.write")
+    const val ROLE = "node"
+    val SCOPES: List<String> = emptyList()
     val CAPS: List<String> = listOf("camera")
     val COMMANDS: List<String> = listOf("camera.snap", "camera.list", "device.status", "device.info")
     const val SESSION_KEY = "turbometa-chat"
@@ -34,6 +34,20 @@ object OpenClawProtocol {
     const val ERROR_PERMISSION_REQUIRED = "PERMISSION_REQUIRED"
     const val ERROR_TIMEOUT = "TIMEOUT"
     const val ERROR_INTERNAL = "INTERNAL"
+}
+
+/** Explicit endpoint configuration; auth/protocol rejection never changes this automatically. */
+enum class OpenClawCompatibility(val minProtocol: Int, val maxProtocol: Int) {
+    CURRENT(4, 4),
+    /** Official v3 nodes use the same camera RPCs and signed node role as v4. */
+    ALLOW_NODE_V3(3, 4),
+    /** Opt-in to the former custom port, including its operator chat and lowercase JSON fields. */
+    LEGACY_CUSTOM_V3(3, 3);
+
+    val isLegacyCustom: Boolean get() = this == LEGACY_CUSTOM_V3
+    val role: String get() = if (isLegacyCustom) "operator" else OpenClawProtocol.ROLE
+    val scopes: List<String>
+        get() = if (isLegacyCustom) listOf("operator.read", "operator.write") else emptyList()
 }
 
 /** Why the connection is in the Error state; the UI maps each reason to a localized string. */

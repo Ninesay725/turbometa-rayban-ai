@@ -73,7 +73,8 @@ fun SettingsScreen(
     onNavigateToOpenClawSettings: () -> Unit = {},
     onNavigateToGlassesDisplayPreview: () -> Unit = {},
     onNavigateToNotificationBridge: () -> Unit = {},
-    onNavigateToTranslateSettings: () -> Unit = {}
+    onNavigateToTranslateSettings: () -> Unit = {},
+    onNavigateToAssistantSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val openClawState by remember { OpenClawNodeService.getInstance(context) }.connectionState.collectAsState()
@@ -434,6 +435,13 @@ fun SettingsScreen(
 
             // Integrations Section
             SettingsSection(title = stringResource(R.string.settings_integrations)) {
+                SettingsItem(
+                    icon = Icons.Default.AutoAwesome,
+                    title = stringResource(R.string.assistant_settings_title),
+                    subtitle = stringResource(R.string.assistant_home_subtitle),
+                    onClick = onNavigateToAssistantSettings
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = AppSpacing.medium))
                 SettingsItem(
                     icon = Icons.Default.Link,
                     title = stringResource(R.string.openclaw_title),

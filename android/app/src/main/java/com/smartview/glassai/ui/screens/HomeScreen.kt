@@ -57,7 +57,8 @@ fun HomeScreen(
     onNavigateToRTMPStream: () -> Unit = {},
     onNavigateToOpenClaw: () -> Unit = {},
     onNavigateToNotificationBridge: () -> Unit = {},
-    onNavigateToTranslate: () -> Unit = {}
+    onNavigateToTranslate: () -> Unit = {},
+    onNavigateToAssistant: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -398,6 +399,14 @@ fun HomeScreen(
                     icon = Icons.Default.Notifications,
                     gradientColors = listOf(Primary, Secondary),
                     onClick = onNavigateToNotificationBridge
+                )
+
+                FeatureCardWide(
+                    title = stringResource(R.string.assistant_title),
+                    subtitle = stringResource(R.string.assistant_home_subtitle),
+                    icon = Icons.Default.AutoAwesome,
+                    gradientColors = listOf(Primary, Secondary),
+                    onClick = onNavigateToAssistant
                 )
 
                 // LiveStream (wide card)

@@ -74,7 +74,12 @@ class OpenClawNodeServiceInstrumentedTest {
             val json = JsonParser.parseString(text).asJsonObject
             received.add(json)
             if (json.get("type")?.asString == "req" && json.get("method")?.asString == "connect") {
-                webSocket.send("""{"type":"res","id":"${json.get("id").asString}","ok":true,"payload":{"protocol":3}}""")
+                val legacy = store.compatibility.isLegacyCustom
+                val protocol = if (legacy) 3 else 4
+                val role = if (legacy) "operator" else "node"
+                webSocket.send("""{"type":"res","id":"${json.get("id").asString}","ok":true,"payload":{"type":"hello-ok","protocol":$protocol,"server":{"version":"2026.9.4","connId":"it"},"features":{"methods":["node.invoke.result","node.event"],"events":["node.invoke.request","tick","chat"]},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{"role":"$role","scopes":[]},"policy":{"maxPayload":26214400,"maxBufferedBytes":52428800,"tickIntervalMs":30000}}}""")
+            } else if (json.get("method")?.asString == "node.event") {
+                webSocket.send("""{"type":"res","id":"${json.get("id").asString}","ok":true,"payload":{"ok":true}}""")
             }
         }
     }
@@ -151,7 +156,8 @@ class OpenClawNodeServiceInstrumentedTest {
     }
 
     @Test
-    fun handshakeOverCleartextWsReachesConnectedAndDeliversChat() {
+    fun explicitLegacyHandshakeOverCleartextWsDeliversChat() {
+        store.compatibility = OpenClawCompatibility.LEGACY_CUSTOM_V3
         service.connect()
         awaitState { it == OpenClawConnectionState.Connected }
         val connect = awaitFrame { it.get("method")?.asString == "connect" }
@@ -176,16 +182,20 @@ class OpenClawNodeServiceInstrumentedTest {
         runBlocking(Dispatchers.Main) { withTimeout(10_000L) { manager.activeDevice.first { it != null } } }
         service.connect()
         awaitState { it == OpenClawConnectionState.Connected }
-        awaitFrame { it.get("method")?.asString == "connect" }
+        val connect = awaitFrame { it.get("method")?.asString == "connect" }.getAsJsonObject("params")
+        assertEquals(4, connect.get("minProtocol").asInt)
+        assertEquals("node", connect.get("role").asString)
+        assertEquals(0, connect.getAsJsonArray("scopes").size())
+        assertEquals("/", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
 
-        socket!!.send("""{"type":"req","id":"snap-1","method":"node.invoke","params":{"command":"camera.snap","params":{"maxWidth":640,"quality":0.8},"timeoutMs":30000}}""")
+        socket!!.send("""{"type":"event","event":"node.invoke.request","payload":{"id":"snap-1","nodeId":"${service.nodeId}","command":"camera.snap","paramsJSON":"{\"maxWidth\":640,\"quality\":0.8}","timeoutMs":30000}}""")
 
         val result = awaitFrame(TIMEOUT_MS) { it.get("method")?.asString == "node.invoke.result" }
         val params = result.getAsJsonObject("params")
         assertEquals("snap-1", params.get("id").asString)
         assertTrue("error: ${params.get("error")}", params.get("ok").asBoolean)
         assertEquals(service.nodeId, params.get("nodeId").asString)
-        val payload = JsonParser.parseString(params.get("payloadjson").asString).asJsonObject
+        val payload = JsonParser.parseString(params.get("payloadJSON").asString).asJsonObject
         assertEquals("jpg", payload.get("format").asString)
         assertTrue(payload.get("width").asInt in 1..640)
         val jpeg = Base64.getDecoder().decode(payload.get("base64").asString)

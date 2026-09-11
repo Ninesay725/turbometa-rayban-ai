@@ -1,0 +1,9 @@
+<resources>
+    <string name="openclaw_compat_title">Gateway compatibility</string>
+    <string name="openclaw_compat_current">Current gateway (protocol 4)</string>
+    <string name="openclaw_compat_node_v3">Official protocol 3–4</string>
+    <string name="openclaw_compat_legacy">Legacy custom gateway (protocol 3)</string>
+    <string name="openclaw_compat_help">Choose the version used by your gateway, then reconnect. Authentication failures never downgrade the protocol automatically. Updating this app does not update your server.</string>
+    <string name="openclaw_forget_pairing">Forget this gateway’s paired credential</string>
+    <string name="openclaw_pairing_reset">Local paired credential cleared. Reconnect and approve this device on your gateway if requested.</string>
+</resources>

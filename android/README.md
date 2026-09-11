@@ -12,6 +12,12 @@ Ray-Ban Meta 智能眼镜 AI 助手 Android 版本。
 
 ## Features | 功能
 
+### Custom AI | 自定义模型助手
+
+首页“自定义 AI”可填写自己的 OpenAI 兼容 Chat Completions 地址、模型名和密钥。支持中文对话、翻译、眼镜拍照识图、镜片回答和朗读；支持工具的模型可操作我们的卡片与已授权的手机音乐。通知摘要单独开启并按应用选择，普通聊天不自动读取通知。完整设置、协议范围与待验证限制见 [自定义 AI 使用说明](../docs/CUSTOM_AI_GUIDE.md)。
+
+网易云、汽水和 QQ 音乐通过 Android 媒体会话控制；具体按钮由音乐应用提供。OpenClaw 保留独立入口，新增当前官方协议与旧版自定义网关兼容选项，App 更新不会修改服务器。
+
 ### Glasses Display | 眼镜显示
 
 Android 的 Display 卡片接入 Live AI、Quick Vision、LeanEat 与 OpenClaw，支持长结果翻页和眼镜按钮操作。设置 → 眼镜显示可关闭此能力；普通 Ray-Ban Meta 继续使用相机功能。微信通知与网易云/汽水音乐桥接已加入开发分支，需由用户分别开启并授予通知使用权；镜片和真实第三方应用的兼容性仍须真机验收。
@@ -79,6 +85,8 @@ The app must be in the foreground for `camera.snap` (the DAT SDK cannot stream f
 
 **Gateway setup | Gateway 配置** (`~/.openclaw/openclaw.json` on the machine running `openclaw gateway`):
 
+This is a configuration fragment, not a replacement for the gateway's authentication settings. Choose the protocol profile in the app to match your server. The current profile was checked against released `v2026.9.4`; details and legacy limitations are in the [compatibility report](../docs/superpowers/reviews/custom-ai/openclaw-compatibility.md). 本示例仅为配置片段，保留现有认证设置；客户端更新不会更新服务器。
+
 ```json
 {
   "gateway": {
@@ -94,7 +102,7 @@ The app must be in the foreground for `camera.snap` (the DAT SDK cannot stream f
 2. Enter the gateway **Host** (LAN IP) and **Port** (default `18789`), choose `ws://` (LAN) or `wss://` (behind TLS), and paste the
    **Gateway Token** from the OpenClaw dashboard URL. Tap **Connect to Gateway**.
 3. First connection shows **Waiting for pairing**: on the gateway machine run `openclaw devices list` then
-   `openclaw devices approve <device-id>` (the device id is the Ed25519 identity the app generated once). The app reconnects automatically.
+   `openclaw devices approve <requestId>` using the pending request ID from the list. Then tap Connect in the app again. See the [official devices CLI](https://docs.openclaw.ai/cli/devices).
 4. Away from home: run [Tailscale](https://tailscale.com) on both machines and use the tailnet IP as the host.
 5. Voice input needs an Alibaba DashScope API key (Settings → API Key); the phone/glasses microphone toggle works like Live AI.
 6. Voice input follows the Alibaba region setting. `fun-asr-realtime` is confirmed on the Beijing endpoint; on the **Singapore** (intl) endpoint its availability has not been verified — if the mic reports "Speech recognition failed", switch the Alibaba endpoint to Beijing.
@@ -104,7 +112,7 @@ The app must be in the foreground for `camera.snap` (the DAT SDK cannot stream f
 1. 重启 Gateway，然后在 App 打开 **设置 → 集成 → OpenClaw**（或聊天页右上角齿轮）。
 2. 填写 Gateway **地址**（局域网 IP）与**端口**（默认 `18789`），选择 `ws://`（局域网）或 `wss://`（TLS 反代），粘贴 OpenClaw 仪表盘 URL 中的
    **Gateway 令牌**，点击 **连接 Gateway**。
-3. 首次连接显示**等待配对**：在 Gateway 机器上执行 `openclaw devices list`，再 `openclaw devices approve <device-id>`。App 会自动重连。
+3. 首次连接显示**等待配对**：在 Gateway 机器上执行 `openclaw devices list`，再用列表中的待批准请求 ID 执行 `openclaw devices approve <requestId>`，之后在 App 再点连接。请求 ID 与设备身份 ID 不同。
 4. 外网访问：两端安装 [Tailscale](https://tailscale.com)，地址填 tailnet IP。
 5. 语音输入需要阿里云 DashScope API Key（设置 → API Key）；手机 / 眼镜麦克风切换与 Live AI 一致。
 6. 语音识别跟随阿里云地域设置。`fun-asr-realtime` 已确认在北京节点可用；**新加坡**（intl）节点尚未验证——若麦克风提示「语音识别失败」，请把阿里云节点切回北京。

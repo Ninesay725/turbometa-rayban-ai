@@ -1,5 +1,13 @@
 # Changelog
 
+## Android 2.0.0 development — custom AI and gateway compatibility
+
+- Added a separate custom AI screen for user-configured OpenAI-compatible Chat Completions endpoints, with encrypted credentials, explicit image/tool capabilities, cancellable requests, lens replies and shared TTS.
+- Added bounded app tools for glasses capture, our Display cards and permitted active music sessions. Notification summaries require separate app selection and consent, have no action tools, and are excluded from ordinary conversation history.
+- Added QQ Music (`com.tencent.qqmusic`) to default music packages while preserving custom selections.
+- Updated OpenClaw against released `v2026.9.4`: protocol 4 node authentication, endpoint-bound paired credentials, supported node-event chat with incremental deltas, and explicit older/custom gateway profiles. This does not upgrade an installed gateway.
+- See [custom AI setup and limits](../docs/CUSTOM_AI_GUIDE.md) and the [current validation ledger](../docs/superpowers/reviews/custom-ai/progress.md). Real model services, gateway policy/pairing and physical glasses remain separate verification steps.
+
 ## Android 2.0.0 development — camera, speech and translation
 
 - RTMP authentication failures now release the attempt and allow retry; retired callbacks are fenced under the stop lock, with 13 production callback regressions. Quick Vision no longer logs prompts, analysis text or provider error bodies.
