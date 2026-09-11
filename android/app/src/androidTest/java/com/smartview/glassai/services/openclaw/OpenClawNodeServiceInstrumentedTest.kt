@@ -60,15 +60,9 @@ class OpenClawNodeServiceInstrumentedTest {
     private val received = LinkedBlockingQueue<JsonObject>()
     @Volatile private var socket: WebSocket? = null
     private lateinit var device: MockGlasses
-    private lateinit var store: SecureOpenClawSettingsStore
+    private lateinit var store: InMemoryOpenClawSettingsStore
     private lateinit var service: OpenClawNodeService
     private lateinit var manager: GlassesSessionManager
-
-    // The real settings stored on this emulator are restored in tearDown()
-    private var savedHost = ""
-    private var savedPort = 0
-    private var savedScheme = ""
-    private var savedToken: String? = null
 
     private val listener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -96,16 +90,13 @@ class OpenClawNodeServiceInstrumentedTest {
         device.unfold()
         device.services.camera.setCameraFeed(assetUri("plant.mp4"))
         device.services.camera.setCapturedImage(assetUri("plant.png"))
-        manager = GlassesSessionManager.getInstance(targetContext)
+        manager = runBlocking(Dispatchers.Main) { GlassesSessionManager.getInstance(targetContext) }
+        runBlocking(Dispatchers.Main) { manager.startMonitoring() }
 
         server.enqueue(MockResponse().withWebSocketUpgrade(listener))
         server.start()
 
-        store = SecureOpenClawSettingsStore(targetContext)
-        savedHost = store.host
-        savedPort = store.port
-        savedScheme = store.scheme
-        savedToken = store.loadToken()
+        store = InMemoryOpenClawSettingsStore()
         store.host = "127.0.0.1"
         store.port = server.port
         store.scheme = "ws"
@@ -145,10 +136,6 @@ class OpenClawNodeServiceInstrumentedTest {
     fun tearDown() {
         service.disconnect()
         runCatching { server.shutdown() }
-        store.host = savedHost
-        store.port = savedPort
-        store.scheme = savedScheme
-        store.saveToken(savedToken)
         runBlocking(Dispatchers.Main) {
             manager.release(SessionFrameProvider.OWNER)
             manager.stopSession()

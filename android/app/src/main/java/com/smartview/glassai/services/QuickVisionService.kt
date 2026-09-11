@@ -25,6 +25,10 @@ import com.smartview.glassai.glasses.FrameConversions
 import com.smartview.glassai.glasses.GlassesPhotoCapturer
 import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.PhotoCaptureOutcome
+import com.smartview.glassai.glasses.DisplayCard
+import com.smartview.glassai.glasses.DisplayIcon
+import com.smartview.glassai.glasses.GlassesDisplayIntegration
+import com.smartview.glassai.glasses.GlassesDisplaySink
 import com.smartview.glassai.MainActivity
 import com.smartview.glassai.R
 import com.smartview.glassai.data.QuickVisionStorage
@@ -32,18 +36,15 @@ import com.smartview.glassai.managers.APIProviderManager
 import com.smartview.glassai.managers.QuickVisionModeManager
 import com.smartview.glassai.utils.APIKeyManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import kotlin.coroutines.resume
 
 /**
  * Quick Vision Service
@@ -58,6 +59,8 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "quick_vision_channel"
         private const val OWNER = "QuickVisionService"
+        const val DISPLAY_OWNER = "QuickVisionDisplay"
+        private const val FAIL_DWELL_FALLBACK_MS = 2_000L
 
         // Service actions
         const val ACTION_CAPTURE_AND_ANALYZE = "com.smartview.glassai.CAPTURE_AND_ANALYZE"
@@ -74,7 +77,8 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
-    private var ttsInitLatch = CountDownLatch(1)
+    private val ttsInitialized = CompletableDeferred<Unit>()
+    private var utteranceSequence = 0L
     private lateinit var apiKeyManager: APIKeyManager
     private lateinit var providerManager: APIProviderManager
     private lateinit var visionService: VisionAPIService
@@ -86,7 +90,12 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
 
     // DAT SDK: the camera is borrowed from the process-wide session owner through GlassesPhotoCapturer
     private val sessionManager: GlassesSessionManager by lazy { GlassesSessionManager.getInstance(this) }
-    private var captureJob: Job? = null
+    private val runs = QuickVisionRunCoordinator(scope, ::cleanup, ::finishService)
+    private val displaySink: GlassesDisplaySink by lazy {
+        GlassesDisplayIntegration.displayManager(application).ownedSink(this)
+    }
+    private var displayClaimHeld = false
+    private var hasDisplayCard = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -136,7 +145,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
             }
             Log.d(TAG, "TTS initialized - system: $systemLocale, output: $outputLocale")
         }
-        ttsInitLatch.countDown()
+        ttsInitialized.complete(Unit)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -156,6 +165,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         Log.d(TAG, "Service onDestroy")
+        runs.stop()
         cleanup()
         scope.cancel()
         tts?.stop()
@@ -167,38 +177,46 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun cleanup() {
-        // GlassesPhotoCapturer.capture() releases the camera and the owner claim in its finally block,
-        // also when the job is cancelled here; stopCamera/release are idempotent, so calling them
-        // again is only a safety net for a capture that never started.
-        captureJob?.cancel()
-        captureJob = null
+        // A rerun invokes this only after the capturer's finally has completed. Destruction can
+        // also call it as a synchronous safety net; no new run is accepted after runs.stop().
         sessionManager.stopCamera(OWNER)
         sessionManager.release(OWNER)
+        if (hasDisplayCard) {
+            displaySink.showStatus()
+            hasDisplayCard = false
+        }
+        if (displayClaimHeld) {
+            displayClaimHeld = false
+            sessionManager.release(DISPLAY_OWNER)
+        }
     }
 
     private fun captureAndAnalyze() {
         Log.d(TAG, "captureAndAnalyze called")
-
-        captureJob = scope.launch {
+        runs.request {
             try {
                 // Wait for TTS to initialize
-                withTimeoutOrNull(2000) {
-                    suspendCancellableCoroutine<Unit> { continuation ->
-                        if (isTtsReady) {
-                            continuation.resume(Unit)
-                        } else {
-                            Thread {
-                                ttsInitLatch.await()
-                                mainHandler.post { continuation.resume(Unit) }
-                            }.start()
-                        }
-                    }
-                }
+                withTimeoutOrNull(2000) { ttsInitialized.await() }
 
                 // 1. Announce "looking"
                 val lookingText = getLocalizedString("looking")
                 Log.d(TAG, "Speaking: $lookingText")
                 speak(lookingText)
+
+                // Metadata can arrive after this service creates the manager. Wait before deciding
+                // whether the result needs a session-only claim; the capturer then sees this device.
+                val device = withTimeoutOrNull(GlassesPhotoCapturer.DEFAULT_DEVICE_WAIT_MS) {
+                    sessionManager.activeDevice.first { it != null }
+                }
+                if (device == null) {
+                    failAndDwell("no_device")
+                    return@request
+                }
+                if (QuickVisionDisplayPolicy.wantsDisplayClaim(sessionManager.isDisplayAvailable.value)) {
+                    sessionManager.acquire(DISPLAY_OWNER)
+                    displayClaimHeld = true
+                }
+                showNotice(getString(R.string.display_looking), DisplayIcon.EYE)
 
                 // 2. Borrow the shared session + camera and take the photo (see GlassesPhotoCapturer)
                 Log.d(TAG, "Acquiring shared glasses session...")
@@ -222,46 +240,47 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                     }
                     PhotoCaptureOutcome.NoDevice -> {
                         Log.e(TAG, "No device connected")
-                        failAndFinish("no_device")
-                        return@launch
+                        failAndDwell("no_device")
+                        return@request
                     }
                     PhotoCaptureOutcome.SessionFailed,
                     PhotoCaptureOutcome.SessionTimeout -> {
                         Log.e(TAG, "Shared session unavailable: $outcome")
-                        failAndFinish("error")
-                        return@launch
+                        failAndDwell("error")
+                        return@request
                     }
                     is PhotoCaptureOutcome.CameraUnavailable -> {
                         Log.e(TAG, "addCamera refused: ${outcome.error}")
                         // Another feature (e.g. the Live AI screen) holds the camera: say so and leave it alone
-                        failAndFinish(if (outcome.error is CameraError.CameraBusy) "camera_busy" else "error")
-                        return@launch
+                        failAndDwell(if (outcome.error is CameraError.CameraBusy) "camera_busy" else "error")
+                        return@request
                     }
                     is PhotoCaptureOutcome.StreamStartFailed -> {
                         Log.e(TAG, "stream.start failed: ${outcome.error.description}")
-                        failAndFinish("error")
-                        return@launch
+                        failAndDwell("error")
+                        return@request
                     }
                     PhotoCaptureOutcome.StreamTimeout -> {
                         Log.e(TAG, "Stream did not reach STREAMING within the budget")
-                        failAndFinish("error")
-                        return@launch
+                        failAndDwell("error")
+                        return@request
                     }
                     PhotoCaptureOutcome.Timeout -> {
                         Log.e(TAG, "Capture exceeded its total budget")
-                        failAndFinish("error")
-                        return@launch
+                        failAndDwell("error")
+                        return@request
                     }
                     PhotoCaptureOutcome.NoImage -> {
                         Log.e(TAG, "No image captured")
-                        failAndFinish("no_image")
-                        return@launch
+                        failAndDwell("no_image")
+                        return@request
                     }
                 }
 
-                // 3. Analyze the captured image (camera and session claim are already released)
+                // 3. The capturer has released its camera/claim; the display claim survives analysis.
                 Log.d(TAG, "Analyzing captured image: ${image.width}x${image.height}")
                 broadcastStatus("analyzing")
+                showNotice(getString(R.string.display_analyzing), DisplayIcon.EYE)
                 updateNotification(getLocalizedString("analyzing"))
 
                 val language = apiKeyManager.getOutputLanguage()
@@ -286,6 +305,9 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
 
                         broadcastResult(description)
                         broadcastStatus("complete")
+                        runs.allowRerun()
+                        hasDisplayCard = true
+                        displaySink.show(DisplayCard.QuickVision(modeManager.currentMode.value.getDisplayName(this@QuickVisionService), description))
                         speakAndWait(description, useOutputLocale = true)  // AI reply uses the output language
                     },
                     onFailure = { error ->
@@ -293,32 +315,36 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                         speak(getLocalizedString("analysis_failed"))
                         broadcastError(error.message ?: "Unknown error")
                         broadcastStatus("error")
+                        showNotice(getLocalizedString("analysis_failed"), DisplayIcon.EXCLAMATION_TRIANGLE)
                     }
                 )
 
-                delay(500)
-                finishService()
-
+                delay(QuickVisionDisplayPolicy.dwellMs(sessionManager.displayState.value,
+                    displayClaimHeld, success = result.isSuccess,
+                    fallbackMs = QuickVisionDisplayPolicy.DEFAULT_DWELL_MS))
             } catch (e: CancellationException) {
-                // cleanup() cancelled us because the service is stopping; the capturer already
-                // released the camera and the owner claim in its finally block.
+                // A stop or Again cancels this run. The coordinator waits for its finalizers
+                // and cleanup before allowing the next run to borrow the same owner name.
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error in captureAndAnalyze: ${e.message}", e)
-                speak(getLocalizedString("error"))
-                broadcastStatus("error")
-                delay(2000)
-                finishService()
+                failAndDwell("error")
             }
         }
     }
 
-    /** Announces [key], tells PorcupineWakeWordService we failed, and stops after 2 s. */
-    private suspend fun failAndFinish(key: String) {
+    /** Announces [key] and dwells; the coordinator then releases the run and finishes the service. */
+    private suspend fun failAndDwell(key: String) {
         speak(getLocalizedString(key))
         broadcastStatus("error")
-        delay(2000)
-        finishService()
+        showNotice(getLocalizedString(key), DisplayIcon.EXCLAMATION_TRIANGLE)
+        delay(QuickVisionDisplayPolicy.dwellMs(sessionManager.displayState.value,
+            displayClaimHeld, success = false, fallbackMs = FAIL_DWELL_FALLBACK_MS))
+    }
+
+    private fun showNotice(body: String, icon: DisplayIcon) {
+        hasDisplayCard = true
+        displaySink.show(DisplayCard.Notice(modeManager.currentMode.value.getDisplayName(this), body, icon))
     }
 
     private fun decodePhoto(photo: PhotoData): Bitmap? = FrameConversions.decodePhoto(photo)
@@ -334,32 +360,36 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "qv_${System.currentTimeMillis()}")
     }
 
-    private suspend fun speakAndWait(text: String, useOutputLocale: Boolean = false) = suspendCancellableCoroutine<Unit> { continuation ->
-        if (!isTtsReady || text.isBlank()) {
-            continuation.resume(Unit)
-            return@suspendCancellableCoroutine
-        }
-
-        val utteranceId = "qv_${System.currentTimeMillis()}"
-
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) {}
-            override fun onDone(id: String?) {
-                if (id == utteranceId && continuation.isActive) {
-                    continuation.resume(Unit)
+    private suspend fun speakAndWait(text: String, useOutputLocale: Boolean = false) {
+        if (!isTtsReady || text.isBlank()) return
+        val engine = tts ?: return
+        val utteranceId = "qv_result_${++utteranceSequence}"
+        val outcome = awaitQuickVisionSpeech(
+            start = { complete ->
+                engine.setLanguage(if (useOutputLocale) outputLocale else systemLocale)
+                val listener = object : UtteranceProgressListener() {
+                    override fun onStart(id: String?) = Unit
+                    override fun onDone(id: String?) {
+                        if (id == utteranceId) complete(QuickVisionSpeechOutcome.DONE)
+                    }
+                    override fun onError(id: String?) {
+                        if (id == utteranceId) complete(QuickVisionSpeechOutcome.ERROR)
+                    }
+                    override fun onStop(id: String?, interrupted: Boolean) {
+                        if (id == utteranceId) complete(QuickVisionSpeechOutcome.STOPPED)
+                    }
                 }
-            }
-            override fun onError(id: String?) {
-                if (id == utteranceId && continuation.isActive) {
-                    continuation.resume(Unit)
-                }
-            }
-        })
-
-        // 根据需要切换语言
-        tts?.setLanguage(if (useOutputLocale) outputLocale else systemLocale)
-        Log.d(TAG, "Speaking (wait): $text (locale: ${if (useOutputLocale) outputLocale else systemLocale})")
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                engine.setOnUtteranceProgressListener(listener) == TextToSpeech.SUCCESS &&
+                    engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) == TextToSpeech.SUCCESS
+            },
+            stop = {
+                // Runs on the service's Main coroutine, also after timeout or cancellation.
+                // Removing the old listener before stopping prevents it from affecting a rerun.
+                engine.setOnUtteranceProgressListener(null)
+                engine.stop()
+            },
+        )
+        if (outcome != QuickVisionSpeechOutcome.DONE) Log.w(TAG, "Result speech ended: $outcome")
     }
 
     private fun getLocalizedString(key: String): String {
@@ -441,6 +471,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
 
     private fun finishService() {
         Log.d(TAG, "Finishing service")
+        runs.stop()
         cleanup()
         broadcastStatus("finished")
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -9,8 +9,13 @@ import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.smartview.glassai.R
+import com.smartview.glassai.glasses.DisplayCard
+import com.smartview.glassai.glasses.GlassesControllerRegistry
+import com.smartview.glassai.glasses.GlassesDisplayIntegration
+import com.smartview.glassai.glasses.GlassesDisplaySink
 import com.smartview.glassai.glasses.GlassesFrameProvider
 import com.smartview.glassai.glasses.GlassesSessionManager
+import com.smartview.glassai.glasses.OpenClawController
 import com.smartview.glassai.glasses.SnapshotResult
 import com.smartview.glassai.managers.APIProvider
 import com.smartview.glassai.managers.APIProviderManager
@@ -28,6 +33,8 @@ import java.util.Base64
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,6 +61,8 @@ class OpenClawViewModel internal constructor(
     private val audioRoute: OpenClawAudioRoute?,
     private val strings: (Int) -> String,
     private val decodeImage: (ByteArray) -> Bitmap?,
+    private val sink: GlassesDisplaySink,
+    private val controllers: GlassesControllerRegistry,
     /** Where the snapped JPEG is decoded into the bubble bitmap (never Main in the app). */
     private val decodeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : AndroidViewModel(application) {
@@ -87,11 +96,14 @@ class OpenClawViewModel internal constructor(
         audioRoute = BluetoothAudioRoute(BluetoothAudioManager(application)),
         strings = { id -> application.getString(id) },
         decodeImage = { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) },
+        sink = GlassesDisplayIntegration.displayManager(application).ownedSink(Any()),
+        controllers = GlassesDisplayIntegration.router(application),
     )
 
     companion object {
         private const val TAG = "OpenClawViewModel"
         const val OWNER = "OpenClawChat"
+        const val SESSION_START_TIMEOUT_MS = 15_000L
         private const val SNAP_MAX_WIDTH = 1600
         private const val SNAP_QUALITY = 0.7
         private const val SNAP_TIMEOUT_MS = 5_000L
@@ -166,6 +178,16 @@ class OpenClawViewModel internal constructor(
     private var chatJob: Job? = null
     private var listenJob: Job? = null
     private var sessionHeld = false
+    private var sessionStartJob: Job? = null
+    private var snapJob: Job? = null
+    private var lastUserText: String? = null
+    // A snapshot begun on an older visit must not replace the current visit's display card.
+    private var screenGeneration = 0
+    private val displayController = object : OpenClawController {
+        override fun snapAndSend() {
+            if (sessionHeld) this@OpenClawViewModel.snapAndSend()
+        }
+    }
 
     /** True while this ViewModel is holding the SCO link open for the chat session. */
     private var scoHeld = false
@@ -173,6 +195,7 @@ class OpenClawViewModel internal constructor(
     private fun str(@StringRes id: Int): String = strings(id)
 
     init {
+        controllers.registerOpenClaw(displayController)
         // Subscribed BEFORE any connect() this ViewModel issues: chatEvents has replay 0, so a
         // `chat` event that lands between connect() and the first collector would be dropped.
         chatJob = viewModelScope.launch {
@@ -185,20 +208,32 @@ class OpenClawViewModel internal constructor(
     /** Acquire the shared session (spec §3 decision 1) and auto-connect when a token is stored. */
     fun enterScreen() {
         if (!sessionHeld) {
+            controllers.registerOpenClaw(displayController)
             sessionHeld = true
-            sessionManager().acquire(OWNER)
+            sessionStartJob = viewModelScope.launch {
+                sessionManager().acquireAndStart(OWNER, SESSION_START_TIMEOUT_MS)
+            }
         }
         connectIfNeeded()
     }
 
     fun leaveScreen() {
+        // A retained back-stack ViewModel must allow the router to navigate back to chat.
+        controllers.unregisterOpenClaw(displayController)
+        screenGeneration++
         stopListening()
         releaseSco()
         flushPendingResponse()
+        snapJob?.cancel()
+        snapJob = null
+        _isSending.value = false
         if (sessionHeld) {
             sessionHeld = false
+            sessionStartJob?.cancel()
+            sessionStartJob = null
             sessionManager().release(OWNER)
         }
+        sink.showStatus()
     }
 
     fun connectIfNeeded() {
@@ -219,6 +254,7 @@ class OpenClawViewModel internal constructor(
         } else {
             _pendingResponse.value = text
         }
+        if (sessionHeld) sink.show(DisplayCard.OpenClaw(lastUserText, text, isFinal))
     }
 
     fun flushPendingResponse() {
@@ -241,20 +277,31 @@ class OpenClawViewModel internal constructor(
         flushPendingResponse()
         append(OpenClawChatMessage(role = OpenClawChatMessage.ROLE_USER, text = text))
         _inputText.value = ""
+        showPendingReply(text)
         deliver(text)
+    }
+
+    private fun showPendingReply(text: String, generation: Int = screenGeneration) {
+        if (!sessionHeld || generation != screenGeneration) return
+        lastUserText = text
+        sink.show(DisplayCard.OpenClaw(text, "", isFinal = false))
     }
 
     /** Snap & Send: latest glasses frame (or a fresh capture) + the typed text or the photo prompt. */
     fun snapAndSend() {
         if (_isSending.value) return
         _isSending.value = true
-        viewModelScope.launch {
+        val generation = screenGeneration
+        snapJob = viewModelScope.launch {
             try {
-                when (val result = frames.snapshot(SNAP_MAX_WIDTH, SNAP_QUALITY, SNAP_TIMEOUT_MS)) {
+                val result = frames.snapshot(SNAP_MAX_WIDTH, SNAP_QUALITY, SNAP_TIMEOUT_MS)
+                currentCoroutineContext().ensureActive()
+                when (result) {
                     is SnapshotResult.Ok -> {
                         val text = _inputText.value.trim().ifEmpty { str(R.string.openclaw_chat_photoprompt) }
                         // BitmapFactory.decodeByteArray of a <= 1600 px JPEG is not main-thread work
                         val image = withContext(decodeDispatcher) { decodeImage(result.frame.jpeg) }
+                        currentCoroutineContext().ensureActive()
                         flushPendingResponse()
                         append(
                             OpenClawChatMessage(
@@ -264,6 +311,7 @@ class OpenClawViewModel internal constructor(
                             )
                         )
                         _inputText.value = ""
+                        showPendingReply(text, generation)
                         val base64 = Base64.getEncoder().encodeToString(result.frame.jpeg)
                         deliver(text, imageJpegBase64 = base64)
                     }
@@ -273,7 +321,7 @@ class OpenClawViewModel internal constructor(
                     }
                 }
             } finally {
-                _isSending.value = false
+                if (generation == screenGeneration) _isSending.value = false
             }
         }
     }
@@ -406,6 +454,7 @@ class OpenClawViewModel internal constructor(
         if (text.isEmpty()) return
         flushPendingResponse()
         append(OpenClawChatMessage(role = OpenClawChatMessage.ROLE_USER, text = text))
+        showPendingReply(text)
         deliver(text)
     }
 

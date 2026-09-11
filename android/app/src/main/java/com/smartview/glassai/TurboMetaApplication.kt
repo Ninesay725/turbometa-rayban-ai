@@ -5,6 +5,7 @@ import android.app.Application
 import android.os.Bundle
 import android.util.Log
 import com.meta.wearable.dat.core.Wearables
+import com.smartview.glassai.glasses.GlassesDisplayIntegration
 import com.smartview.glassai.services.openclaw.OpenClawIntegration
 
 class TurboMetaApplication : Application() {
@@ -39,6 +40,7 @@ class TurboMetaApplication : Application() {
         // EncryptedSharedPreferences store and the Ed25519 seed still wait for the first connect().
         // install() itself never throws.
         OpenClawIntegration.install(this)
+        GlassesDisplayIntegration.install(this)
     }
 
     companion object {

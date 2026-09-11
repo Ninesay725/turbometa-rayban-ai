@@ -12,6 +12,16 @@ Ray-Ban Meta 智能眼镜 AI 助手 Android 版本。
 
 ## Features | 功能
 
+### Glasses Display | 眼镜显示
+
+Android 的 Display 卡片接入 Live AI、Quick Vision、LeanEat 与 OpenClaw，支持长结果翻页和眼镜按钮操作。设置 → 眼镜显示可关闭此能力；普通 Ray-Ban Meta 继续使用相机功能。首轮为纯文本卡片，微信通知与网易云/汽水音乐桥接属于后续阶段。
+
+需要 Meta Ray-Ban Display 固件 V125+、Meta AI V282+，并在 Developer Mode 中安装眼镜端 DAT Wearables App。卡片共用功能正在使用的会话，不建立永久后台显示会话。Quick Vision 显示结果直到语音播报结束后再停留 15 秒；Live AI 增量更新最多每 600 ms 一次。
+
+调试版「设置 → 开发者 → 眼镜显示预览」可在手机预览卡片；预览按钮会操作真实应用功能。MockDeviceKit 没有 Display 模型，手机预览与模拟器通过不能证明镜片渲染已通过。实际设备验收见 [Phase C 硬件检查表](../docs/superpowers/reviews/phase-c/hardware-checklist.md)。
+
+The Android implementation provides text cards for Live AI, Quick Vision, LeanEat and OpenClaw on the shared feature session. The debug preview is a phone approximation; physical display rendering, sleep behavior and bandwidth still require the hardware checklist. Navigation taps received with no foreground Activity are dropped in Phase C.
+
 ### Live AI | 实时 AI 对话
 - Real-time voice conversation with AI through Ray-Ban Meta glasses
 - Supports Alibaba Qwen Omni and Google Gemini Live

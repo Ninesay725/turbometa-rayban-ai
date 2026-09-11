@@ -37,6 +37,7 @@ import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.smartview.glassai.R
+import com.smartview.glassai.glasses.GlassesDisplayState
 import com.smartview.glassai.services.openclaw.OpenClawConnectionState
 import com.smartview.glassai.services.openclaw.OpenClawNodeService
 import com.smartview.glassai.ui.theme.*
@@ -64,6 +65,9 @@ fun HomeScreen(
     val hasActiveDevice by wearablesViewModel.hasActiveDevice.collectAsState()
     val isFirmwareUpdateRequired by wearablesViewModel.isFirmwareUpdateRequired.collectAsState()
     val isDatAppUpdateRequired by wearablesViewModel.isDatAppUpdateRequired.collectAsState()
+    val displayState by wearablesViewModel.displayState.collectAsState()
+    val isDisplayCapable by wearablesViewModel.isDisplayCapable.collectAsState()
+    val isDisplayAvailable by wearablesViewModel.isDisplayAvailable.collectAsState()
 
     // OpenClaw: card subtitle shows the live state; auto-connect once a token is stored
     // (iOS TurboMetaHomeView.onAppear semantics; there is no openclaw_enabled flag).
@@ -286,6 +290,9 @@ fun HomeScreen(
                 connectionState = connectionState,
                 isFirmwareUpdateRequired = isFirmwareUpdateRequired,
                 isDatAppUpdateRequired = isDatAppUpdateRequired,
+                isDisplayCapable = isDisplayCapable,
+                isDisplayAvailable = isDisplayAvailable,
+                displayState = displayState,
                 onConnect = { withActivity { wearablesViewModel.startDeviceSearch(it) } },
                 onDisconnect = { withActivity { wearablesViewModel.disconnect(it) } },
                 onUpdateFirmware = { withActivity { wearablesViewModel.openFirmwareUpdate(it) } },
@@ -616,6 +623,9 @@ private fun DeviceStatusCard(
     connectionState: WearablesViewModel.ConnectionState,
     isFirmwareUpdateRequired: Boolean,
     isDatAppUpdateRequired: Boolean,
+    isDisplayCapable: Boolean,
+    isDisplayAvailable: Boolean,
+    displayState: GlassesDisplayState,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onUpdateFirmware: () -> Unit,
@@ -773,7 +783,44 @@ private fun DeviceStatusCard(
                     onClick = onUpdateDatApp
                 )
             }
+            if (isDisplayCapable) {
+                DisplayStatusRow(
+                    text = stringResource(
+                        if (!isDisplayAvailable) R.string.display_status_off
+                        else when (displayState) {
+                            GlassesDisplayState.STARTING -> R.string.display_status_preparing
+                            GlassesDisplayState.STARTED -> R.string.display_status_ready
+                            GlassesDisplayState.STOPPING,
+                            GlassesDisplayState.STOPPED,
+                            GlassesDisplayState.CLOSED -> R.string.display_status_stopped
+                            GlassesDisplayState.NOT_ATTACHED -> R.string.display_status_not_attached
+                        }
+                    ),
+                    ready = isDisplayAvailable && displayState == GlassesDisplayState.STARTED
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun DisplayStatusRow(text: String, ready: Boolean) {
+    val tint = if (ready) Success else TextSecondaryLight
+    HorizontalDivider(modifier = Modifier.padding(horizontal = AppSpacing.medium))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = AppSpacing.medium, vertical = AppSpacing.small),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Visibility,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(AppSpacing.small))
+        Text(text = text, fontSize = 13.sp, color = tint)
     }
 }
 

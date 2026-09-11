@@ -61,12 +61,16 @@ class OpenClawNodeServiceTest {
      * Records every state the flow emits from now on. Subscribes before returning, so a transient
      * state (Reconnecting/Connecting) cannot be missed by a later `first { }` on the conflated flow.
      */
-    private fun recordStates(service: OpenClawNodeService): Pair<MutableList<OpenClawConnectionState>, Job> {
+    private fun recordStates(
+        service: OpenClawNodeService,
+        onRecorded: (OpenClawConnectionState) -> Unit = {},
+    ): Pair<MutableList<OpenClawConnectionState>, Job> {
         val states = CopyOnWriteArrayList<OpenClawConnectionState>()
         val subscribed = CountDownLatch(1)
         val job = CoroutineScope(Dispatchers.Default).launch {
             service.connectionState.collect {
                 states += it
+                onRecorded(it)
                 subscribed.countDown()
             }
         }
@@ -326,11 +330,17 @@ class OpenClawNodeServiceTest {
         val service = startGatewayAndConnect(upgrades = 2)
         service.connectionState.awaitValue { it == OpenClawConnectionState.Connected }
         assertEquals(1, gateway.opens)
-        val (states, recorder) = recordStates(service) // subscribed BEFORE the close: no missed transient
+        val recordedReconnect = CountDownLatch(1)
+        val (states, recorder) = recordStates(service) { state ->
+            if (state == OpenClawConnectionState.Connected && gateway.opens == 2) recordedReconnect.countDown()
+        }
 
         gateway.socket!!.close(1000, "bye")
 
         service.connectionState.awaitValue(timeoutMs = 8_000) { it == OpenClawConnectionState.Connected && gateway.opens == 2 }
+        // The independent waiter above can win the dispatch race. Wait for this recorder
+        // before cancelling it, otherwise its last entry may still be Connecting.
+        assertTrue(recordedReconnect.await(2, TimeUnit.SECONDS))
         recorder.cancel()
         assertTrue("states: $states", states.contains(OpenClawConnectionState.Reconnecting(1)))
         assertEquals(OpenClawConnectionState.Connected, states.last())

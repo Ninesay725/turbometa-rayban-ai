@@ -5,7 +5,9 @@ import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamError
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
-import com.meta.wearable.dat.core.session.DeviceSession
+import com.meta.wearable.dat.display.types.DisplayError
+import com.meta.wearable.dat.display.types.DisplayState
+import com.meta.wearable.dat.display.views.ContentScope
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceSessionError
 import kotlinx.coroutines.flow.Flow
@@ -59,10 +61,16 @@ class FakeGlassesSession(private val stopAsync: Boolean = false) : GlassesSessio
     /** Applied to every camera this session hands out: startStream() returns this error. */
     var nextStartError: StreamError? = null
     val cameras = mutableListOf<FakeGlassesCamera>()
+    val lifecycleCalls = mutableListOf<String>()
+    var addDisplayCalls = 0
+    var removeDisplayCalls = 0
+    var nextAddDisplayFailure: DeviceSessionError? = null
+    var nextRemoveDisplayFailure: DeviceSessionError? = null
+    val displays = mutableListOf<FakeGlassesDisplay>()
+    val display get() = displays.last()
 
     override val state: StateFlow<DeviceSessionState> = stateFlow
     override val errors: SharedFlow<DeviceSessionError> = errorFlow
-    override val nativeSession: DeviceSession? = null
 
     override fun start() {
         startCalls++
@@ -70,8 +78,27 @@ class FakeGlassesSession(private val stopAsync: Boolean = false) : GlassesSessio
     }
 
     override fun stop() {
+        lifecycleCalls += "stop"
         stopCalls++
         stateFlow.value = if (stopAsync) DeviceSessionState.STOPPING else DeviceSessionState.STOPPED
+    }
+
+    override fun addDisplay(): DisplayAddResult {
+        addDisplayCalls++
+        nextAddDisplayFailure?.let {
+            nextAddDisplayFailure = null
+            return DisplayAddResult.Failure(it)
+        }
+        return DisplayAddResult.Success(FakeGlassesDisplay().also { displays += it })
+    }
+
+    override fun removeDisplay(): DeviceSessionError? {
+        lifecycleCalls += "removeDisplay"
+        removeDisplayCalls++
+        val error = nextRemoveDisplayFailure
+        nextRemoveDisplayFailure = null
+        if (error == null) displays.lastOrNull()?.stateFlow?.value = DisplayState.CLOSED
+        return error
     }
 
     override fun addCamera(config: StreamConfiguration): CameraAddResult {
@@ -140,14 +167,30 @@ class FakeDatDeviceObserver : DatDeviceObserver {
     }
 }
 
-class RecordingDisplayAttacher : DisplayAttacher {
-    val attachCalls = mutableListOf<GlassesDeviceInfo?>()
-    var detachCalls = 0
-    override val displayState = MutableStateFlow(GlassesDisplayState.NOT_ATTACHED)
-    override fun maybeAttach(session: GlassesSession, device: GlassesDeviceInfo?) {
-        attachCalls += device
+class FakeGlassesDisplay : GlassesDisplay {
+    val stateFlow = MutableStateFlow(DisplayState.STARTING)
+    override val state: StateFlow<DisplayState> = stateFlow
+    var sendCalls = 0
+    val sentBlocks = mutableListOf<ContentScope.() -> Unit>()
+    val scriptedSendFailures = ArrayDeque<DisplayError>()
+    var clearCalls = 0
+    var stopCalls = 0
+    var closeCalls = 0
+    override suspend fun sendContent(block: ContentScope.() -> Unit): DisplaySendResult {
+        sendCalls++
+        sentBlocks += block
+        return scriptedSendFailures.removeFirstOrNull()?.let { DisplaySendResult.Failed(it) }
+            ?: DisplaySendResult.Sent
     }
-    override fun detach() {
-        detachCalls++
+    override suspend fun clearDisplay(): DisplaySendResult {
+        clearCalls++
+        return DisplaySendResult.Sent
+    }
+    override fun stop() { stopCalls++; stateFlow.value = DisplayState.CLOSED }
+    override fun close() { closeCalls++; stateFlow.value = DisplayState.CLOSED }
+    fun emitStarted() { stateFlow.value = DisplayState.STARTED }
+    fun emitStopped() {
+        stateFlow.value = DisplayState.STOPPING
+        stateFlow.value = DisplayState.STOPPED
     }
 }

@@ -22,6 +22,11 @@ import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationError
 import com.meta.wearable.dat.core.types.RegistrationState
+import com.meta.wearable.dat.display.Display
+import com.meta.wearable.dat.display.addDisplay
+import com.meta.wearable.dat.display.removeDisplay
+import com.meta.wearable.dat.display.types.DisplayConfiguration
+import com.meta.wearable.dat.display.views.ContentScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
@@ -58,17 +63,41 @@ class SdkGlassesCamera(private val camera: Camera) : GlassesCamera {
 }
 
 /** Wraps an SDK DeviceSession behind [GlassesSession]. */
+class SdkGlassesDisplay(private val display: Display) : GlassesDisplay {
+    override val state get() = display.state
+    override suspend fun sendContent(block: ContentScope.() -> Unit): DisplaySendResult =
+        display.sendContent(block).fold(
+            onSuccess = { DisplaySendResult.Sent },
+            onFailure = { error, _ -> DisplaySendResult.Failed(error) },
+        )
+    override suspend fun clearDisplay(): DisplaySendResult = display.clearDisplay().fold(
+        onSuccess = { DisplaySendResult.Sent },
+        onFailure = { error, _ -> DisplaySendResult.Failed(error) },
+    )
+    override fun stop() = display.stop()
+    override fun close() = display.close()
+}
+
+/** Wraps an SDK DeviceSession behind [GlassesSession]. */
 class SdkGlassesSession(private val session: DeviceSession) : GlassesSession {
     override val state: StateFlow<DeviceSessionState>
         get() = session.state
     override val errors: SharedFlow<DeviceSessionError>
         get() = session.errors
-    override val nativeSession: DeviceSession
-        get() = session
 
     override fun start() = session.start()
 
     override fun stop() = session.stop()
+
+    override fun addDisplay(): DisplayAddResult = session.addDisplay(DisplayConfiguration()).fold(
+        onSuccess = { DisplayAddResult.Success(SdkGlassesDisplay(it)) },
+        onFailure = { error, _ -> DisplayAddResult.Failure(error) },
+    )
+
+    override fun removeDisplay(): DeviceSessionError? = session.removeDisplay().fold(
+        onSuccess = { null },
+        onFailure = { error, _ -> error },
+    )
 
     override fun addCamera(config: StreamConfiguration): CameraAddResult =
         session.addCamera(config).fold(

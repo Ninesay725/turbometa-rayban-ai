@@ -2,12 +2,16 @@ package com.smartview.glassai.glasses
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceSessionError
+import com.smartview.glassai.BuildConfig
+import com.smartview.glassai.utils.APIKeyManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -39,7 +43,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   transitions to STOPPING; creating earlier fails with SESSION_ALREADY_EXISTS).
  * - Lends the single camera capability to one owner at a time ([addCamera] / [stopCamera]).
  * - Exposes session/display/device state as StateFlows and session errors as a SharedFlow.
- * - [DisplayAttacher] is the Phase C hook: attach on STARTED, detach before stop.
+ * - Attaches one Display on capable devices after STARTED; removes it before stopping the session.
  *
  * Threading: every public function must be called on the main thread. The production scope is
  * Dispatchers.Main.immediate; unit tests inject a TestScope.
@@ -48,7 +52,7 @@ class GlassesSessionManager internal constructor(
     private val sessionFactory: DatSessionFactory,
     private val deviceObserver: DatDeviceObserver,
     private val scope: CoroutineScope,
-    private val displayAttacher: DisplayAttacher = DisplayAttacher.None,
+    private val displayEnabled: () -> Boolean = { true },
 ) {
     companion object {
         private const val TAG = "GlassesSessionManager"
@@ -71,7 +75,9 @@ class GlassesSessionManager internal constructor(
                         sessionFactory = adapter,
                         deviceObserver = adapter,
                         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
-                        displayAttacher = DisplayAttacher.None,
+                        displayEnabled = {
+                            APIKeyManager.getInstance(context.applicationContext).isGlassesDisplayEnabled()
+                        },
                     ).also { created ->
                         created.startMonitoring()
                         instance = created
@@ -124,9 +130,16 @@ class GlassesSessionManager internal constructor(
      */
     val sessionState: StateFlow<DeviceSessionState> = _sessionState.asStateFlow()
 
-    /** Display capability state (Phase C); always NOT_ATTACHED in Phase A. */
-    val displayState: StateFlow<GlassesDisplayState>
-        get() = displayAttacher.displayState
+    private var display: GlassesDisplay? = null
+    private var displayStateJob: Job? = null
+    private var enabledSetting: Boolean? = null
+    private val _displayState = MutableStateFlow(GlassesDisplayState.NOT_ATTACHED)
+    val displayState: StateFlow<GlassesDisplayState> = _displayState.asStateFlow()
+    private val _isDisplayAvailable = MutableStateFlow(false)
+    val isDisplayAvailable: StateFlow<Boolean> = _isDisplayAvailable.asStateFlow()
+    @VisibleForTesting
+    internal var displayAttachAttempts = 0
+        private set
 
     private val _sessionError = MutableSharedFlow<DeviceSessionError>(extraBufferCapacity = 16)
     /** createSession failures and DeviceSession.errors, in order. */
@@ -191,6 +204,7 @@ class GlassesSessionManager internal constructor(
      * Assigning first, then starting, makes the null-out stick.
      */
     fun startMonitoring() {
+        checkMain("startMonitoring")
         if (deviceJob != null) return
         val job = scope.launch(start = CoroutineStart.LAZY) {
             runCatching {
@@ -200,6 +214,8 @@ class GlassesSessionManager internal constructor(
                     .catch { Log.e(TAG, "device flow failed", it) }
                     .collect { info ->
                         _activeDevice.value = info
+                        updateDisplayAvailability()
+                        maybeAttachDisplay()
                     }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -229,6 +245,7 @@ class GlassesSessionManager internal constructor(
      *   (the OpenClaw chat holds the session so a snap does not pay the 12 s session start).
      */
     fun acquire(owner: String, forCamera: Boolean = false) {
+        checkMain("acquire")
         owners.add(owner)
         if (forCamera && cameraIntents.add(owner)) cameraClaimCount = cameraIntents.size
         Log.d(TAG, "acquire($owner, forCamera=$forCamera) owners=$owners cameraIntents=$cameraIntents " +
@@ -243,6 +260,7 @@ class GlassesSessionManager internal constructor(
 
     /** Drops [owner]'s claim (and its camera); stops the session when nobody is left. */
     fun release(owner: String) {
+        checkMain("release")
         if (!owners.remove(owner)) return
         if (cameraIntents.remove(owner)) cameraClaimCount = cameraIntents.size
         Log.d(TAG, "release($owner) owners=$owners cameraIntents=$cameraIntents")
@@ -261,6 +279,7 @@ class GlassesSessionManager internal constructor(
      *   latter case the error is emitted on [sessionError].
      */
     fun ensureSession(): Boolean {
+        checkMain("ensureSession")
         if (stoppingSession != null) return false
         val error = createSessionIfNeeded() ?: return true
         _sessionState.value = DeviceSessionState.STOPPED
@@ -277,11 +296,25 @@ class GlassesSessionManager internal constructor(
      * Only the final createSession failure is emitted on [sessionError].
      */
     suspend fun ensureSessionStarted(timeoutMs: Long): SessionStartResult {
+        checkMain("ensureSessionStarted")
+        return ensureSessionStartedFor(null, timeoutMs)
+    }
+
+    /** Keeps a feature's session alive without reserving the camera. */
+    suspend fun acquireAndStart(owner: String, timeoutMs: Long): SessionStartResult {
+        checkMain("acquireAndStart")
+        acquire(owner)
+        return ensureSessionStartedFor(owner, timeoutMs)
+    }
+
+    private suspend fun ensureSessionStartedFor(owner: String?, timeoutMs: Long): SessionStartResult {
         awaitPreviousSessionStopped()
+        if (owner != null && owner !in owners) return SessionStartResult.NOT_STARTED
         var error = createSessionIfNeeded()
         if (error == DeviceSessionError.SESSION_ALREADY_EXISTS) {
             Log.w(TAG, "SESSION_ALREADY_EXISTS: SDK still holds the previous session; retrying once")
             delay(ALREADY_EXISTS_RETRY_DELAY_MS)
+            if (owner != null && owner !in owners) return SessionStartResult.NOT_STARTED
             error = createSessionIfNeeded()
         }
         if (error != null) {
@@ -360,6 +393,7 @@ class GlassesSessionManager internal constructor(
 
     /** Lends the camera to [owner]. Must be called after the session is STARTED. */
     fun addCamera(owner: String, config: StreamConfiguration): CameraResult {
+        checkMain("addCamera")
         val current = session ?: return CameraResult.Failed(CameraError.NoSession)
         if (_sessionState.value != DeviceSessionState.STARTED) {
             return CameraResult.Failed(CameraError.SessionNotStarted)
@@ -386,12 +420,13 @@ class GlassesSessionManager internal constructor(
 
     /** Stops and detaches the camera if [owner] holds it; ignored otherwise. */
     fun stopCamera(owner: String) {
+        checkMain("stopCamera")
         if (cameraOwner != owner) {
             if (cameraOwner != null) Log.w(TAG, "stopCamera($owner) ignored: held by $cameraOwner")
             return
         }
         Log.d(TAG, "stopCamera($owner)")
-        camera?.stop()
+        timedStop("camera") { camera?.stop() }
         camera = null
         cameraOwner = null
         _latestFrame.value = null
@@ -414,6 +449,10 @@ class GlassesSessionManager internal constructor(
      */
     @VisibleForTesting
     internal fun resetForTests() {
+        checkMain("resetForTests")
+        detachDisplay()
+        deviceJob?.cancel()
+        deviceJob = null
         owners.clear()
         cameraIntents.clear()
         cameraClaimCount = 0
@@ -424,6 +463,11 @@ class GlassesSessionManager internal constructor(
         _latestFrame.value = null
         _isDatAppUpdateRequired.value = false
         _sessionState.value = DeviceSessionState.STOPPED
+        _activeDevice.value = null
+        _lastSessionError.value = null
+        enabledSetting = null
+        _isDisplayAvailable.value = false
+        displayAttachAttempts = 0
     }
 
     /**
@@ -431,10 +475,11 @@ class GlassesSessionManager internal constructor(
      * The outgoing session stays observed until the SDK reports STOPPED (see [ensureSessionStarted]).
      */
     fun stopSession() {
+        checkMain("stopSession")
         val current = session ?: return
         Log.d(TAG, "stopSession")
-        displayAttacher.detach()
-        camera?.stop()
+        detachDisplay()
+        timedStop("camera") { camera?.stop() }
         camera = null
         cameraOwner = null
         _latestFrame.value = null
@@ -449,7 +494,7 @@ class GlassesSessionManager internal constructor(
             Log.d(TAG, "previous session reported STOPPED")
             clearStopping(current, fromJob = coroutineContext[Job])
         }
-        current.stop()
+        timedStop("session") { current.stop() }
     }
 
     private fun onSessionState(source: GlassesSession, state: DeviceSessionState) {
@@ -457,7 +502,7 @@ class GlassesSessionManager internal constructor(
         Log.d(TAG, "session state: $state")
         _sessionState.value = state
         when (state) {
-            DeviceSessionState.STARTED -> displayAttacher.maybeAttach(source, _activeDevice.value)
+            DeviceSessionState.STARTED -> maybeAttachDisplay()
             DeviceSessionState.STOPPED -> teardownAfterDeviceStop()
             else -> Unit
         }
@@ -479,8 +524,8 @@ class GlassesSessionManager internal constructor(
      * stop() on an already-stopped capability is expected to be harmless; it is guarded anyway.
      */
     private fun teardownAfterDeviceStop() {
-        displayAttacher.detach()
-        runCatching { camera?.stop() }
+        detachDisplay()
+        runCatching { timedStop("camera") { camera?.stop() } }
             .onFailure { Log.w(TAG, "camera.stop() after device stop failed", it) }
         camera = null
         cameraOwner = null
@@ -495,5 +540,85 @@ class GlassesSessionManager internal constructor(
         sessionStateJob = null
         sessionErrorJob?.cancel()
         sessionErrorJob = null
+    }
+
+    fun currentDisplay(): GlassesDisplay? {
+        checkMain("currentDisplay")
+        return display
+    }
+
+    fun setDisplayEnabled(enabled: Boolean) {
+        checkMain("setDisplayEnabled")
+        enabledSetting = enabled
+        updateDisplayAvailability()
+        if (enabled) maybeAttachDisplay() else detachDisplay()
+    }
+
+    /** Explicit recovery only; a terminal display state never restarts the user's experience. */
+    fun reattachDisplay() {
+        checkMain("reattachDisplay")
+        detachDisplay()
+        maybeAttachDisplay()
+    }
+
+    private fun updateDisplayAvailability() {
+        val capable = _activeDevice.value?.isDisplayCapable == true
+        if (capable && enabledSetting == null) enabledSetting = displayEnabled()
+        _isDisplayAvailable.value = capable && enabledSetting == true
+    }
+
+    private fun maybeAttachDisplay() {
+        val current = session ?: return
+        if (_sessionState.value != DeviceSessionState.STARTED || display != null ||
+            !_isDisplayAvailable.value) return
+        displayAttachAttempts++
+        when (val result = current.addDisplay()) {
+            is DisplayAddResult.Failure -> onSessionError(result.error)
+            is DisplayAddResult.Success -> {
+                val attached = result.display
+                display = attached
+                displayStateJob = scope.launch {
+                    attached.state.collect { state ->
+                        if (display === attached) {
+                            _displayState.value = GlassesDisplayState.valueOf(state.name)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun detachDisplay() {
+        val attached = display ?: return
+        displayStateJob?.cancel()
+        displayStateJob = null
+        display = null
+        val error = session?.removeDisplay()
+        if (error != null || session == null) {
+            if (error == DeviceSessionError.SESSION_ALREADY_STOPPED ||
+                error == DeviceSessionError.CAPABILITY_NOT_FOUND) {
+                Log.d(TAG, "display already removed: $error")
+            } else if (error != null) {
+                Log.e(TAG, "removeDisplay failed: ${error.description}")
+            }
+            runCatching { attached.close() }.onFailure { Log.w(TAG, "display.close failed", it) }
+        }
+        _displayState.value = GlassesDisplayState.NOT_ATTACHED
+    }
+
+    private inline fun timedStop(capability: String, stop: () -> Unit) {
+        val started = if (BuildConfig.DEBUG) SystemClock.elapsedRealtime() else 0L
+        try { stop() } finally {
+            if (BuildConfig.DEBUG) Log.d(TAG, "$capability.stop() took ${SystemClock.elapsedRealtime() - started} ms")
+        }
+    }
+
+    private fun checkMain(function: String) {
+        if (BuildConfig.DEBUG) {
+            val main = Looper.getMainLooper()
+            if (main != null) check(Looper.myLooper() === main) {
+                "GlassesSessionManager: $function must be called on the main thread"
+            }
+        }
     }
 }

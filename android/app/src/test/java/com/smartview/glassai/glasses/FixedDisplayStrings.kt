@@ -1,0 +1,31 @@
+package com.smartview.glassai.glasses
+
+/** Every label equals its property name unless overridden. */
+data class FixedDisplayStrings(
+    override val liveAi: String = "liveAi",
+    override val quickVision: String = "quickVision",
+    override val leanEat: String = "leanEat",
+    override val openClaw: String = "openClaw",
+    override val connecting: String = "connecting",
+    override val listening: String = "listening",
+    override val processing: String = "processing",
+    override val speaking: String = "speaking",
+    override val connected: String = "connected",
+    override val needsApiKey: String = "needsApiKey",
+    override val disconnected: String = "disconnected",
+    override val prev: String = "prev",
+    override val next: String = "next",
+    override val done: String = "done",
+    override val again: String = "again",
+    override val snap: String = "snap",
+    override val end: String = "end",
+    override val looking: String = "looking",
+    override val analyzing: String = "analyzing",
+    override val calories: String = "calories",
+    override val protein: String = "protein",
+    override val fat: String = "fat",
+    override val carbs: String = "carbs",
+    override val kcal: String = "kcal",
+    override val gram: String = "gram",
+    override val healthScore: String = "healthScore",
+) : DisplayStrings

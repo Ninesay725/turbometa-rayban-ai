@@ -14,7 +14,7 @@ data class GlassesDeviceInfo(
 )
 
 /** Display capability lifecycle as seen by the app. Phase A never leaves NOT_ATTACHED. */
-enum class GlassesDisplayState { NOT_ATTACHED, STARTING, STARTED, STOPPED }
+enum class GlassesDisplayState { NOT_ATTACHED, STARTING, STARTED, STOPPING, STOPPED, CLOSED }
 
 /** Result of [GlassesSessionManager.ensureSessionStarted]. */
 enum class SessionStartResult {

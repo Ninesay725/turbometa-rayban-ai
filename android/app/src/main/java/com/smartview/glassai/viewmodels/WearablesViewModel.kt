@@ -23,6 +23,7 @@ import com.smartview.glassai.glasses.DatRegistrationGateway
 import com.smartview.glassai.glasses.FrameConversions
 import com.smartview.glassai.glasses.GlassesCamera
 import com.smartview.glassai.glasses.GlassesDeviceInfo
+import com.smartview.glassai.glasses.GlassesDisplayState
 import com.smartview.glassai.glasses.GlassesErrorMessages
 import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.glasses.PhotoCaptureResult
@@ -36,9 +37,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -157,6 +161,16 @@ class WearablesViewModel internal constructor(
     /** DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED seen -> show "Update glasses app". */
     val isDatAppUpdateRequired: StateFlow<Boolean>
         get() = sessionManager.isDatAppUpdateRequired
+
+    val displayState: StateFlow<GlassesDisplayState>
+        get() = sessionManager.displayState
+
+    val isDisplayCapable: StateFlow<Boolean> = activeDevice
+        .map { it?.isDisplayCapable == true }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val isDisplayAvailable: StateFlow<Boolean>
+        get() = sessionManager.isDisplayAvailable
 
     // Borrowed camera (null when not streaming)
     private var camera: GlassesCamera? = null

@@ -5,6 +5,12 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.smartview.glassai.glasses.GlassesDisplaySink
+import com.smartview.glassai.glasses.GlassesControllerRegistry
+import com.smartview.glassai.glasses.GlassesDisplayIntegration
+import com.smartview.glassai.glasses.LiveAiRunGate
+import com.smartview.glassai.glasses.LiveAiCardMapper
+import com.smartview.glassai.glasses.LiveAiController
 import com.smartview.glassai.data.ConversationStorage
 import com.smartview.glassai.managers.APIProviderManager
 import com.smartview.glassai.managers.BluetoothAudioManager
@@ -18,6 +24,8 @@ import com.smartview.glassai.utils.APIKeyManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -26,7 +34,13 @@ import java.util.UUID
  * Supports multiple Live AI providers: Alibaba Qwen Omni, Google Gemini
  * 1:1 port from iOS OmniRealtimeViewModel
  */
-class OmniRealtimeViewModel(application: Application) : AndroidViewModel(application) {
+class OmniRealtimeViewModel internal constructor(
+    application: Application,
+    private val sink: GlassesDisplaySink,
+    private val controllers: GlassesControllerRegistry,
+) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application,
+        GlassesDisplayIntegration.displayManager(application).ownedSink(Any()), GlassesDisplayIntegration.router(application))
 
     companion object {
         private const val TAG = "OmniRealtimeViewModel"
@@ -89,16 +103,38 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
 
     private var currentSessionId: String = UUID.randomUUID().toString()
     private var pendingVideoFrame: Bitmap? = null
+    private val displayController = object : LiveAiController { override fun end() = disconnect() }
+    private var hasDisplayCard = false
+    private val runs = LiveAiRunGate()
+    private val observerJobs = mutableListOf<Job>()
 
     init {
+        controllers.registerLiveAi(displayController)
+        viewModelScope.launch {
+            combine(viewState, userTranscript, currentTranscript, messages, isConnected) { state, user, text, history, connected ->
+                if (connected || state == ViewState.Connecting) {
+                    LiveAiCardMapper.map(state, user, text,
+                        history.lastOrNull { it.role == MessageRole.ASSISTANT }?.content)
+                } else null
+            }.collect { card ->
+                if (card != null && runs.active) {
+                    hasDisplayCard = true
+                    sink.show(card)
+                } else if (hasDisplayCard) {
+                    hasDisplayCard = false
+                    sink.showStatus()
+                }
+            }
+        }
         // Observe provider changes
         viewModelScope.launch {
             providerManager.liveAIProvider.collect { provider ->
                 if (_currentProvider.value != provider) {
                     _currentProvider.value = provider
                     Log.d(TAG, "Live AI provider changed to: ${provider.displayName}")
-                    // Refresh service if connected
-                    if (_isConnected.value) {
+                    // Replacing a provider ends even an in-flight connection. Queued callbacks
+                    // from that service must not attach to its replacement's generation.
+                    if (runs.active) {
                         disconnect()
                     }
                     initializeService()
@@ -109,6 +145,12 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun initializeService() {
+        observerJobs.forEach { it.cancel() }
+        observerJobs.clear()
+        omniService?.disconnect()
+        geminiService?.disconnect()
+        omniService = null
+        geminiService = null
         val provider = providerManager.liveAIProvider.value
         val apiKey = providerManager.getLiveAIAPIKey(apiKeyManager)
         val language = apiKeyManager.getOutputLanguage()
@@ -128,6 +170,7 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun initializeOmniService(apiKey: String, language: String) {
+        val run = runs.generation
         // Clean up Gemini service if exists
         geminiService?.disconnect()
         geminiService = null
@@ -137,42 +180,55 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
 
         omniService = OmniRealtimeService(apiKey, model, language, endpoint, getApplication()).apply {
             onTranscriptDelta = { delta ->
-                _currentTranscript.value += delta
+                deliverForRun(run) {
+                    _currentTranscript.value += delta
+                }
             }
 
             onTranscriptDone = { transcript ->
-                if (transcript.isNotBlank()) {
-                    addAssistantMessage(transcript)
+                deliverForRun(run) {
+                    if (transcript.isNotBlank()) {
+                        addAssistantMessage(transcript)
+                    }
+                    _currentTranscript.value = ""
+                    _viewState.value = ViewState.Connected
                 }
-                _currentTranscript.value = ""
-                _viewState.value = ViewState.Connected
             }
 
             onUserTranscript = { transcript ->
-                if (transcript.isNotBlank()) {
-                    _userTranscript.value = transcript
-                    addUserMessage(transcript)
+                deliverForRun(run) {
+                    if (transcript.isNotBlank()) {
+                        _userTranscript.value = transcript
+                        addUserMessage(transcript)
+                    }
                 }
             }
 
             onSpeechStarted = {
-                _viewState.value = ViewState.Recording
+                deliverForRun(run) {
+                    _viewState.value = ViewState.Recording
+                }
             }
 
             onSpeechStopped = {
-                _viewState.value = ViewState.Processing
+                deliverForRun(run) {
+                    _viewState.value = ViewState.Processing
+                }
             }
 
             onError = { error ->
-                _errorMessage.value = error
-                _viewState.value = ViewState.Error(error)
+                deliverForRun(run) {
+                    _errorMessage.value = error
+                    _viewState.value = ViewState.Error(error)
+                }
             }
         }
 
-        observeOmniServiceStates()
+        observeOmniServiceStates(run)
     }
 
     private fun initializeGeminiService(apiKey: String, language: String) {
+        val run = runs.generation
         // Clean up Omni service if exists
         omniService?.disconnect()
         omniService = null
@@ -181,66 +237,83 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
 
         geminiService = GeminiLiveService(apiKey, model, language).apply {
             onTranscriptDelta = { delta ->
-                _currentTranscript.value += delta
+                deliverForRun(run) {
+                    _currentTranscript.value += delta
+                }
             }
 
             onTranscriptDone = { transcript ->
-                if (transcript.isNotBlank()) {
-                    addAssistantMessage(_currentTranscript.value.ifBlank { transcript })
+                deliverForRun(run) {
+                    if (transcript.isNotBlank()) {
+                        addAssistantMessage(_currentTranscript.value.ifBlank { transcript })
+                    }
+                    _currentTranscript.value = ""
+                    _viewState.value = ViewState.Connected
                 }
-                _currentTranscript.value = ""
-                _viewState.value = ViewState.Connected
             }
 
             onUserTranscript = { transcript ->
-                if (transcript.isNotBlank()) {
-                    _userTranscript.value = transcript
-                    addUserMessage(transcript)
+                deliverForRun(run) {
+                    if (transcript.isNotBlank()) {
+                        _userTranscript.value = transcript
+                        addUserMessage(transcript)
+                    }
                 }
             }
 
             onSpeechStarted = {
-                _viewState.value = ViewState.Recording
+                deliverForRun(run) {
+                    _viewState.value = ViewState.Recording
+                }
             }
 
             onSpeechStopped = {
-                _viewState.value = ViewState.Processing
+                deliverForRun(run) {
+                    _viewState.value = ViewState.Processing
+                }
             }
 
             onError = { error ->
-                _errorMessage.value = error
-                _viewState.value = ViewState.Error(error)
+                deliverForRun(run) {
+                    _errorMessage.value = error
+                    _viewState.value = ViewState.Error(error)
+                }
             }
 
             onConnected = {
-                _isConnected.value = true
-                _viewState.value = ViewState.Connected
+                deliverForRun(run) {
+                    _isConnected.value = true
+                    _viewState.value = ViewState.Connected
+                }
             }
         }
 
-        observeGeminiServiceStates()
+        observeGeminiServiceStates(run)
     }
 
-    private fun observeOmniServiceStates() {
-        viewModelScope.launch {
+    private fun observeOmniServiceStates(run: Long) {
+        observerJobs += viewModelScope.launch {
             omniService?.isConnected?.collect { connected ->
+                if (!runs.accepts(run)) return@collect
                 _isConnected.value = connected
                 if (connected && _viewState.value == ViewState.Connecting) {
                     _viewState.value = ViewState.Connected
-                } else if (!connected && _viewState.value != ViewState.Idle) {
+                } else if (!connected && _viewState.value != ViewState.Connecting) {
                     _viewState.value = ViewState.Idle
                 }
             }
         }
 
-        viewModelScope.launch {
+        observerJobs += viewModelScope.launch {
             omniService?.isRecording?.collect { recording ->
+                if (!runs.accepts(run)) return@collect
                 _isRecording.value = recording
             }
         }
 
-        viewModelScope.launch {
+        observerJobs += viewModelScope.launch {
             omniService?.isSpeaking?.collect { speaking ->
+                if (!runs.accepts(run)) return@collect
                 _isSpeaking.value = speaking
                 if (speaking) {
                     _viewState.value = ViewState.Speaking
@@ -249,26 +322,29 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    private fun observeGeminiServiceStates() {
-        viewModelScope.launch {
+    private fun observeGeminiServiceStates(run: Long) {
+        observerJobs += viewModelScope.launch {
             geminiService?.isConnected?.collect { connected ->
+                if (!runs.accepts(run)) return@collect
                 _isConnected.value = connected
                 if (connected && _viewState.value == ViewState.Connecting) {
                     _viewState.value = ViewState.Connected
-                } else if (!connected && _viewState.value != ViewState.Idle) {
+                } else if (!connected && _viewState.value != ViewState.Connecting) {
                     _viewState.value = ViewState.Idle
                 }
             }
         }
 
-        viewModelScope.launch {
+        observerJobs += viewModelScope.launch {
             geminiService?.isRecording?.collect { recording ->
+                if (!runs.accepts(run)) return@collect
                 _isRecording.value = recording
             }
         }
 
-        viewModelScope.launch {
+        observerJobs += viewModelScope.launch {
             geminiService?.isSpeaking?.collect { speaking ->
+                if (!runs.accepts(run)) return@collect
                 _isSpeaking.value = speaking
                 if (speaking) {
                     _viewState.value = ViewState.Speaking
@@ -279,7 +355,14 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
 
     fun connect() {
         viewModelScope.launch {
-            if (_isConnected.value) return@launch
+            if (_isConnected.value || _viewState.value == ViewState.Connecting) return@launch
+            runs.begin()
+            initializeService()
+            if (omniService == null && geminiService == null) {
+                runs.end()
+                _viewState.value = ViewState.Error(_errorMessage.value.orEmpty())
+                return@launch
+            }
 
             _viewState.value = ViewState.Connecting
             _messages.value = emptyList()
@@ -292,7 +375,14 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    private fun deliverForRun(run: Long, block: () -> Unit) {
+        viewModelScope.launch { if (runs.accepts(run)) block() }
+    }
+
     fun disconnect() {
+        runs.end()
+        if (hasDisplayCard) sink.showStatus()
+        hasDisplayCard = false
         viewModelScope.launch {
             saveCurrentConversation()
             omniService?.disconnect()
@@ -418,6 +508,9 @@ class OmniRealtimeViewModel(application: Application) : AndroidViewModel(applica
     }
 
     override fun onCleared() {
+        runs.end()
+        controllers.unregisterLiveAi(displayController)
+        if (hasDisplayCard) sink.showStatus()
         super.onCleared()
         saveCurrentConversation()
         omniService?.disconnect()

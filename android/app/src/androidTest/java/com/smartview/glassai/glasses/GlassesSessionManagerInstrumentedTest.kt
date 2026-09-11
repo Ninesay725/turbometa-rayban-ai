@@ -93,7 +93,8 @@ class GlassesSessionManagerInstrumentedTest {
         device.don()
         device.unfold()
         device.services.camera.setCameraFeed(assetUri("plant.mp4"))
-        manager = GlassesSessionManager.getInstance(targetContext)
+        manager = onMain { GlassesSessionManager.getInstance(targetContext) }
+        runBlocking(Dispatchers.Main) { manager.startMonitoring() }
     }
 
     @After
@@ -230,7 +231,7 @@ class GlassesSessionManagerInstrumentedTest {
         }
     }
 
-    // ---- Phase A never attaches the Display (spec §10) ----
+    // ---- Display capability gating on non-Display glasses ----
 
     @Test
     fun displayIsNeverAttachedForANonDisplayCapableDevice() = onMain {
@@ -239,8 +240,11 @@ class GlassesSessionManagerInstrumentedTest {
 
         manager.acquire(OWNER)
         assertEquals(SessionStartResult.STARTED, manager.ensureSessionStarted(SESSION_TIMEOUT_MS))
-        // DisplayAttacher.None is wired in getInstance(): STARTED must not trigger addDisplay().
+        // The real Display lifecycle must not attempt to attach on MockDeviceKit RAYBAN_META.
         assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
+        assertNull(manager.currentDisplay())
+        assertEquals(0, manager.displayAttachAttempts)
+        assertFalse(manager.isDisplayAvailable.value)
 
         manager.release(OWNER)
         withTimeout(SESSION_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STOPPED } }
@@ -383,6 +387,38 @@ class GlassesSessionManagerInstrumentedTest {
     }
 
     // ---- helpers ----
+
+    @Test
+    @org.junit.Ignore("DAT 0.9.0 public STOPPED precedes transport completion; immediate restart hangs even in a clean MDK process. See phase-c/sdk-restart-review.md. Run separately after SDK/hardware assessment.")
+    fun acquireAndStartFromSessionOnlyOwnerAfterStoppingReachesStarted() {
+        onMain {
+            awaitActiveDevice()
+            assertEquals(SessionStartResult.STARTED, manager.acquireAndStart(OWNER, SESSION_TIMEOUT_MS))
+            // Releasing immediately after STARTED reproduced a native channel/health-listener
+            // hang on this AVD; unfinished transport startup is a hypothesis, not a proven cause
+            // (Phase C task-9 report). Keep this wait explicit: this test verifies switching a
+            // settled session, not the unresolved rapid start/stop SDK stress case.
+            delay(STREAM_SETTLE_MS)
+            manager.release(OWNER)
+            // stop() can complete synchronously on MDK; both paths must be safe. The JVM async
+            // fake separately pins creation waiting for STOPPED and owner cancellation.
+            assertEquals(SessionStartResult.STARTED, manager.acquireAndStart("display-feature", SESSION_TIMEOUT_MS))
+            assertEquals(1, manager.ownerCount)
+            assertFalse(manager.hasCameraClaim)
+            delay(STREAM_SETTLE_MS)
+            manager.release("display-feature")
+            withTimeout(SESSION_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STOPPED } }
+        }
+    }
+
+    @Test
+    fun acquireOffMainThrowsBeforeCreatingAnOwner() {
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        Thread { failure.set(runCatching { manager.acquire("off-main") }.exceptionOrNull()) }
+            .apply { start(); join(5_000) }
+        assertTrue(failure.get() is IllegalStateException)
+        onMain { assertEquals(0, manager.ownerCount) }
+    }
 
     private fun <T> onMain(block: suspend () -> T): T = runBlocking(Dispatchers.Main) { block() }
 

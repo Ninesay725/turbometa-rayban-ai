@@ -446,6 +446,9 @@
     <string name="mock_power">电源</string>
     <string name="mock_donned">佩戴</string>
     <string name="mock_unfolded">展开</string>
+    <string name="mock_state_unknown">未知</string>
+    <string name="mock_state_on">开启</string>
+    <string name="mock_state_off">关闭</string>
     <string name="mock_captouch_title">触控板手势（仅会话激活时）</string>
     <string name="mock_captouch_tap">轻触（暂停/恢复）</string>
     <string name="mock_captouch_tap_and_hold">长按（停止）</string>
@@ -522,4 +525,29 @@
     <string name="rtmp_disconnected">与服务器断开连接</string>
     <string name="rtmp_first_frame_timeout">10 秒内未收到眼镜画面</string>
     <string name="rtmp_connect_failed">连接 RTMP 服务器失败</string>
+
+    <!-- Phase C Task 3: glasses display card labels -->
+    <string name="display_status_needs_api_key">请先在设置中配置 API Key</string>
+    <string name="display_prev">上一页</string>
+    <string name="display_next">下一页</string>
+    <string name="display_done">完成</string>
+    <string name="display_again">再来一次</string>
+    <string name="display_snap">拍照</string>
+    <string name="display_looking">正在识别…</string>
+    <string name="display_analyzing">正在分析…</string>
+    <string name="display_end">结束</string>
+
+    <!-- Phase C Tasks 7/8: display settings, Home status and debug preview -->
+    <string name="display_section">眼镜显示</string>
+    <string name="display_enabled">在眼镜屏幕上显示结果</string>
+    <string name="display_enabled_desc">仅支持 Meta Ray-Ban Display</string>
+    <string name="display_status_unsupported">当前设备不支持显示</string>
+    <string name="display_status_preparing">正在准备显示…</string>
+    <string name="display_status_ready">显示已就绪</string>
+    <string name="display_status_off">眼镜显示已关闭</string>
+    <string name="display_status_stopped">显示已停止</string>
+    <string name="display_status_not_attached">显示未连接</string>
+    <string name="display_preview_title">眼镜显示预览</string>
+    <string name="display_preview_subtitle">在手机上预览眼镜卡片（仅调试版）</string>
+    <string name="display_preview_actions_hint">预览按钮会执行真实的应用操作。</string>
 </resources>

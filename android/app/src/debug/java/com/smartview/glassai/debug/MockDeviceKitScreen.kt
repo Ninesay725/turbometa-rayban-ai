@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -48,6 +49,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -225,15 +228,18 @@ private fun MockDeviceCard(info: MockDeviceInfo, viewModel: MockDeviceKitViewMod
             }
             HorizontalDivider()
 
-            ToggleRow(stringResource(R.string.mock_power), info.isPoweredOn) { on ->
-                if (on) viewModel.powerOn(info) else viewModel.powerOff(info)
-            }
-            ToggleRow(stringResource(R.string.mock_donned), info.isDonned) { on ->
-                if (on) viewModel.don(info) else viewModel.doff(info)
-            }
-            ToggleRow(stringResource(R.string.mock_unfolded), info.isUnfolded) { on ->
-                if (on) viewModel.unfold(info) else viewModel.fold(info)
-            }
+            ToggleRow(
+                label = stringResource(R.string.mock_power), checked = info.isPoweredOn,
+                onEnable = { viewModel.powerOn(info) }, onDisable = { viewModel.powerOff(info) },
+            )
+            ToggleRow(
+                label = stringResource(R.string.mock_donned), checked = info.isDonned,
+                onEnable = { viewModel.don(info) }, onDisable = { viewModel.doff(info) },
+            )
+            ToggleRow(
+                label = stringResource(R.string.mock_unfolded), checked = info.isUnfolded,
+                onEnable = { viewModel.unfold(info) }, onDisable = { viewModel.fold(info) },
+            )
 
             Text(
                 text = stringResource(R.string.mock_captouch_title),
@@ -316,16 +322,54 @@ private fun MockDeviceCard(info: MockDeviceInfo, viewModel: MockDeviceKitViewMod
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(36.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+private fun ToggleRow(label: String, checked: Boolean?, onEnable: () -> Unit, onDisable: () -> Unit) {
+    if (checked == null) {
+        val onLabel = stringResource(R.string.mock_state_on)
+        val offLabel = stringResource(R.string.mock_state_off)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(AppSpacing.small),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(AppSpacing.small),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    stringResource(R.string.mock_state_unknown),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // An unknown value cannot be inverted. Let the user choose the exact SDK command;
+            // only a successful ViewModel action replaces this state with a normal switch.
+            Row(horizontalArrangement = Arrangement.spacedBy(AppSpacing.small)) {
+                OutlinedButton(
+                    onClick = onEnable,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                        .semantics { contentDescription = "$label: $onLabel" },
+                ) { Text(onLabel) }
+                OutlinedButton(
+                    onClick = onDisable,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                        .semantics { contentDescription = "$label: $offLabel" },
+                ) { Text(offLabel) }
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            horizontalArrangement = Arrangement.spacedBy(AppSpacing.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = checked,
+                onCheckedChange = { if (it) onEnable() else onDisable() },
+                modifier = Modifier.semantics { contentDescription = label },
+            )
+        }
     }
 }
 

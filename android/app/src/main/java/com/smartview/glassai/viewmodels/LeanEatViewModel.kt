@@ -8,19 +8,48 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.smartview.glassai.R
+import com.smartview.glassai.glasses.DisplayCard
+import com.smartview.glassai.glasses.DisplayIcon
+import com.smartview.glassai.glasses.GlassesDisplayIntegration
+import com.smartview.glassai.glasses.GlassesDisplaySink
+import com.smartview.glassai.glasses.toLeanEatCard
 import com.smartview.glassai.models.FoodNutritionResponse
 import com.smartview.glassai.services.LeanEatService
 import com.smartview.glassai.utils.APIKeyManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 
-class LeanEatViewModel(application: Application) : AndroidViewModel(application) {
+fun interface LeanEatAnalyzer {
+    suspend fun analyzeFood(image: Bitmap): Result<FoodNutritionResponse>
+}
 
-    private val apiKeyManager = APIKeyManager.getInstance(application)
-    private var leanEatService: LeanEatService? = null
+class LeanEatViewModel internal constructor(
+    application: Application,
+    private val sink: GlassesDisplaySink,
+    private val strings: (Int) -> String,
+    private val apiKey: () -> String?,
+    private val analyzerFactory: (String) -> LeanEatAnalyzer,
+) : AndroidViewModel(application) {
+
+    constructor(application: Application) : this(
+        application,
+        GlassesDisplayIntegration.displayManager(application).ownedSink(Any()),
+        application::getString,
+        { APIKeyManager.getInstance(application).getAPIKey() },
+        { key -> LeanEatService(key) },
+    )
+
+    private var leanEatService: LeanEatAnalyzer? = null
+    private var analysisJob: Job? = null
 
     // State
     sealed class ViewState {
@@ -51,9 +80,9 @@ class LeanEatViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun initializeService() {
-        val apiKey = apiKeyManager.getAPIKey()
-        if (!apiKey.isNullOrBlank()) {
-            leanEatService = LeanEatService(apiKey)
+        val key = apiKey()
+        if (!key.isNullOrBlank()) {
+            leanEatService = analyzerFactory(key)
         }
     }
 
@@ -71,46 +100,47 @@ class LeanEatViewModel(application: Application) : AndroidViewModel(application)
         }
 
         if (leanEatService == null) {
-            val apiKey = apiKeyManager.getAPIKey()
-            if (apiKey.isNullOrBlank()) {
+            val key = apiKey()
+            if (key.isNullOrBlank()) {
                 _errorMessage.value = "API Key not configured"
                 _viewState.value = ViewState.Error("API Key not configured")
                 return
             }
-            leanEatService = LeanEatService(apiKey)
+            leanEatService = analyzerFactory(key)
         }
 
-        viewModelScope.launch {
+        cancelAnalysis()
+        analysisJob = viewModelScope.launch {
             _viewState.value = ViewState.Analyzing
             _isAnalyzing.value = true
+            val title = strings(R.string.feature_leaneat_title)
+            sink.show(DisplayCard.Notice(title, strings(R.string.display_analyzing), DisplayIcon.FORK_KNIFE))
 
             try {
                 val result = leanEatService!!.analyzeFood(image)
-
-                result.fold(
-                    onSuccess = { response ->
-                        _nutritionResult.value = response
-                        _viewState.value = ViewState.Result(response)
-                    },
-                    onFailure = { error ->
-                        _errorMessage.value = error.message
-                        _viewState.value = ViewState.Error(error.message ?: "Analysis failed")
-                    }
-                )
+                // A network operation may return after reset/retake cancelled this analysis.
+                currentCoroutineContext().ensureActive()
+                val response = result.getOrThrow()
+                _nutritionResult.value = response
+                _viewState.value = ViewState.Result(response)
+                sink.show(response.toLeanEatCard())
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                val message = e.message ?: "Analysis failed"
                 _errorMessage.value = e.message
-                _viewState.value = ViewState.Error(e.message ?: "Analysis failed")
+                _viewState.value = ViewState.Error(message)
+                sink.show(DisplayCard.Notice(title, message, DisplayIcon.EXCLAMATION_TRIANGLE))
             } finally {
-                _isAnalyzing.value = false
+                // A cancelled, slow request must not clear the next analysis's busy flag.
+                if (currentCoroutineContext().isActive) _isAnalyzing.value = false
             }
         }
     }
 
     fun retakePhoto() {
-        _capturedImage.value = null
-        _nutritionResult.value = null
-        _viewState.value = ViewState.Idle
-        _errorMessage.value = null
+        reset()
     }
 
     fun saveImageToGallery(): Boolean {
@@ -162,10 +192,18 @@ class LeanEatViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun reset() {
+        cancelAnalysis()
         _capturedImage.value = null
         _nutritionResult.value = null
         _viewState.value = ViewState.Idle
         _errorMessage.value = null
+        sink.showStatus()
+    }
+
+    private fun cancelAnalysis() {
+        analysisJob?.cancel()
+        analysisJob = null
+        _isAnalyzing.value = false
     }
 
     fun refreshService() {
@@ -175,6 +213,8 @@ class LeanEatViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
+        cancelAnalysis()
+        sink.showStatus()
         _capturedImage.value?.recycle()
     }
 }

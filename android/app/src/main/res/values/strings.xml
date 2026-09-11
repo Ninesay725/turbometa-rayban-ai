@@ -446,6 +446,9 @@
     <string name="mock_power">Power</string>
     <string name="mock_donned">Worn</string>
     <string name="mock_unfolded">Unfolded</string>
+    <string name="mock_state_unknown">Unknown</string>
+    <string name="mock_state_on">On</string>
+    <string name="mock_state_off">Off</string>
     <string name="mock_captouch_title">Touchpad gestures (active session only)</string>
     <string name="mock_captouch_tap">Tap (pause/resume)</string>
     <string name="mock_captouch_tap_and_hold">Tap and hold (stop)</string>
@@ -522,4 +525,29 @@
     <string name="rtmp_disconnected">Disconnected from server</string>
     <string name="rtmp_first_frame_timeout">No video from the glasses within 10 seconds</string>
     <string name="rtmp_connect_failed">Failed to connect to RTMP server</string>
+
+    <!-- Phase C Task 3: glasses display card labels -->
+    <string name="display_status_needs_api_key">Set an API key in Settings</string>
+    <string name="display_prev">Prev</string>
+    <string name="display_next">Next</string>
+    <string name="display_done">Done</string>
+    <string name="display_again">Again</string>
+    <string name="display_snap">Snap</string>
+    <string name="display_looking">Looking…</string>
+    <string name="display_analyzing">Analyzing…</string>
+    <string name="display_end">End</string>
+
+    <!-- Phase C Tasks 7/8: display settings, Home status and debug preview -->
+    <string name="display_section">Glasses Display</string>
+    <string name="display_enabled">Show results on glasses display</string>
+    <string name="display_enabled_desc">Meta Ray-Ban Display only</string>
+    <string name="display_status_unsupported">Not supported by this device</string>
+    <string name="display_status_preparing">Preparing display…</string>
+    <string name="display_status_ready">Display ready</string>
+    <string name="display_status_off">Display off</string>
+    <string name="display_status_stopped">Display stopped</string>
+    <string name="display_status_not_attached">Display not attached</string>
+    <string name="display_preview_title">Glasses display preview</string>
+    <string name="display_preview_subtitle">Render display cards on the phone (debug only)</string>
+    <string name="display_preview_actions_hint">Preview buttons run real app actions.</string>
 </resources>

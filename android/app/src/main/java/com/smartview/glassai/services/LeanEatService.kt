@@ -6,6 +6,8 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.smartview.glassai.models.FoodItem
 import com.smartview.glassai.models.FoodNutritionResponse
+import com.smartview.glassai.viewmodels.LeanEatAnalyzer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,7 +17,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
-class LeanEatService(private val apiKey: String) {
+class LeanEatService(private val apiKey: String) : LeanEatAnalyzer {
 
     companion object {
         private const val BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -65,7 +67,7 @@ class LeanEatService(private val apiKey: String) {
 
     private val gson = Gson()
 
-    suspend fun analyzeFood(image: Bitmap): Result<FoodNutritionResponse> = withContext(Dispatchers.IO) {
+    override suspend fun analyzeFood(image: Bitmap): Result<FoodNutritionResponse> = withContext(Dispatchers.IO) {
         try {
             val base64Image = encodeImageToBase64(image)
             val requestBody = buildRequestBody(base64Image)
@@ -94,6 +96,8 @@ class LeanEatService(private val apiKey: String) {
             }
 
             Result.success(nutritionResponse)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }

@@ -24,15 +24,14 @@ class GlassesSessionManagerTest {
 
     private val factory = FakeDatSessionFactory()
     private val observer = FakeDatDeviceObserver()
-    private val attacher = RecordingDisplayAttacher()
     private val config = StreamConfiguration()
 
-    private fun TestScope.newManager(displayAttacher: DisplayAttacher = attacher): GlassesSessionManager =
+    private fun TestScope.newManager(displayEnabled: () -> Boolean = { true }): GlassesSessionManager =
         GlassesSessionManager(
             sessionFactory = factory,
             deviceObserver = observer,
             scope = backgroundScope,
-            displayAttacher = displayAttacher,
+            displayEnabled = displayEnabled,
         ).also { it.startMonitoring() }
 
     private val rayban = GlassesDeviceInfo(
@@ -82,7 +81,7 @@ class GlassesSessionManagerTest {
         assertEquals(1, factory.last.stopCalls)
         assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
         assertFalse(manager.hasSession)
-        assertEquals(1, attacher.detachCalls)
+        assertEquals(0, factory.last.removeDisplayCalls)
     }
 
     @Test
@@ -328,7 +327,7 @@ class GlassesSessionManagerTest {
         assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
         assertFalse(manager.hasSession)
         assertNull(manager.currentCameraOwner)
-        assertEquals(1, attacher.detachCalls)
+        assertEquals(0, factory.last.removeDisplayCalls)
         assertEquals(1, manager.ownerCount)
 
         manager.acquire("A") // no previous session is stopping (the device already reported STOPPED)
@@ -419,40 +418,6 @@ class GlassesSessionManagerTest {
         observer.device.value = null
         assertNull(manager.activeDevice.value)
         assertFalse(manager.isFirmwareUpdateRequired.value)
-    }
-
-    @Test
-    fun displayAttacherIsCalledOnStartedWithActiveDevice() = runTest(UnconfinedTestDispatcher()) {
-        val manager = newManager()
-        val displayDevice = rayban.copy(
-            deviceType = DeviceType.META_RAYBAN_DISPLAY,
-            isDisplayCapable = true,
-        )
-        observer.device.value = displayDevice
-        manager.acquire("A")
-        assertTrue(attacher.attachCalls.isEmpty())
-
-        factory.last.emitStarted()
-
-        assertEquals(listOf<GlassesDeviceInfo?>(displayDevice), attacher.attachCalls)
-        assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
-    }
-
-    /** Phase A ships DisplayAttacher.None: the display is never attached, even on a display-capable device. */
-    @Test
-    fun defaultAttacherNeverAttachesDisplayEvenForDisplayCapableDevice() = runTest(UnconfinedTestDispatcher()) {
-        val manager = newManager(displayAttacher = DisplayAttacher.None)
-        observer.device.value = rayban.copy(
-            deviceType = DeviceType.META_RAYBAN_DISPLAY,
-            isDisplayCapable = true,
-        )
-        manager.acquire("A")
-        factory.last.emitStarted()
-        assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
-
-        manager.release("A")
-        assertEquals(GlassesDisplayState.NOT_ATTACHED, manager.displayState.value)
-        assertNull(factory.last.nativeSession) // fakes never expose an SDK session for addDisplay()
     }
 
     @Test
@@ -560,7 +525,6 @@ class GlassesSessionManagerTest {
             sessionFactory = factory,
             deviceObserver = observer,
             scope = backgroundScope,
-            displayAttacher = attacher,
         )
 
         manager.startMonitoring() // must not throw out of this call
@@ -635,7 +599,6 @@ class GlassesSessionManagerTest {
             sessionFactory = factory,
             deviceObserver = observer,
             scope = backgroundScope,
-            displayAttacher = attacher,
         )
 
         manager.startMonitoring()

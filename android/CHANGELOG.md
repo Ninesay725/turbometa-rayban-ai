@@ -3,6 +3,9 @@
 ## [2.0.0] - 2026-09-10
 
 ### 新功能
+- **Meta Ray-Ban Display 镜片卡片**：Live AI 转录、Quick Vision 结果、LeanEat 营养分析和 OpenClaw 回复共用现有眼镜会话；长结果可翻页，Live AI 增量更新按 600 ms 合并。
+- 设置增加眼镜显示开关；调试版增加手机卡片预览。首轮卡片仅使用文本，微信与音乐桥接安排在后续阶段。
+- Display 会话启动后挂载、停止前移除；会话占用不阻塞拍照，退出等待中的功能不会留下后台会话。真实镜片渲染与按钮仍需按 Phase C 硬件清单验收。
 - **OpenClaw 集成**：完整节点模式。App 以 `openclaw-android` 身份连接自建 OpenClaw Gateway（`ws://` 或 `wss://`），
   支持文字 / 语音（阿里云 Fun-ASR 实时识别）/ 拍照发送，AI 可通过 `camera.snap`、`camera.list`、
   `device.status`、`device.info` 主动调用眼镜。设备身份为 Ed25519（Tink），与 iOS 协议逐字段一致。

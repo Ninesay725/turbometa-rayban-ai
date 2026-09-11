@@ -58,6 +58,26 @@ class GlassesPhotoCapturerTest {
     )
 
     @Test
+    fun quickVisionDisplayClaimOutlivesTheCapturerAndReleasesTheDisplayLast() = runTest(dispatcher) {
+        observer.device.value = rayban.copy(deviceType = DeviceType.META_RAYBAN_DISPLAY, isDisplayCapable = true)
+        factory.nextCaptureResult = PhotoCaptureResult.Success(heicPhoto)
+        val manager = newManager()
+        manager.acquire("QuickVisionDisplay")
+        factory.last.emitStarted()
+        factory.last.display.emitStarted()
+        val outcome = async { capturer(manager).capture() }
+        factory.last.cameras.single().stateFlow.value = DatStreamState.STREAMING
+        assertEquals(PhotoCaptureOutcome.Captured("photo", false), outcome.await())
+        assertEquals(1, manager.ownerCount)
+        assertNull(manager.currentCameraOwner)
+        assertEquals(GlassesDisplayState.STARTED, manager.displayState.value)
+        assertEquals(0, factory.last.stopCalls)
+        manager.release("QuickVisionDisplay")
+        assertEquals(listOf("removeDisplay", "stop"), factory.last.lifecycleCalls)
+        assertEquals(0, manager.ownerCount)
+    }
+
+    @Test
     fun capturesPhotoThroughSharedSessionAndReleasesEverything() = runTest(dispatcher) {
         observer.device.value = rayban
         factory.nextCaptureResult = PhotoCaptureResult.Success(heicPhoto)

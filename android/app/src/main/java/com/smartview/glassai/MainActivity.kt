@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
+import com.smartview.glassai.glasses.GlassesDisplayIntegration
 import com.smartview.glassai.managers.LanguageManager
 import com.smartview.glassai.ui.navigation.TurboMetaNavigation
 import com.smartview.glassai.ui.theme.TurboMetaTheme
@@ -105,7 +106,8 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     TurboMetaNavigation(
                         wearablesViewModel = wearablesViewModel,
-                        onRequestWearablesPermission = ::requestWearablesPermission
+                        onRequestWearablesPermission = ::requestWearablesPermission,
+                        navigationRequests = GlassesDisplayIntegration.navigationRequests
                     )
                 }
             }
@@ -135,5 +137,6 @@ class MainActivity : AppCompatActivity() {
         // Wearables.initialize() already ran in TurboMetaApplication.onCreate().
         // Start observing Wearables state once the Bluetooth runtime permissions are granted.
         wearablesViewModel.startMonitoring()
+        GlassesDisplayIntegration.ensureStarted(application)
     }
 }

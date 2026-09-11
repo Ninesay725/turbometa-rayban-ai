@@ -10,6 +10,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -18,11 +21,14 @@ import androidx.navigation.compose.rememberNavController
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.smartview.glassai.R
+import com.smartview.glassai.debug.GlassesDisplayPreviewEntry
 import com.smartview.glassai.debug.MockDeviceKitEntry
+import com.smartview.glassai.glasses.NavigationRequest
 import com.smartview.glassai.ui.components.WearablesErrorToast
 import com.smartview.glassai.ui.screens.*
 import com.smartview.glassai.ui.theme.Primary
 import com.smartview.glassai.viewmodels.WearablesViewModel
+import kotlinx.coroutines.flow.SharedFlow
 
 sealed class Screen(val route: String) {
     object Home : Screen("home")
@@ -38,6 +44,7 @@ sealed class Screen(val route: String) {
     object QuickVisionMode : Screen("quick_vision_mode")
     object LiveAIMode : Screen("live_ai_mode")
     object MockDeviceKit : Screen("mock_device_kit")
+    object GlassesDisplayPreview : Screen("glasses_display_preview")
     object OpenClaw : Screen("openclaw")
     object OpenClawSettings : Screen("openclaw_settings")
 }
@@ -57,9 +64,26 @@ sealed class BottomNavItem(
 @Composable
 fun TurboMetaNavigation(
     wearablesViewModel: WearablesViewModel,
-    onRequestWearablesPermission: suspend (Permission) -> PermissionStatus
+    onRequestWearablesPermission: suspend (Permission) -> PermissionStatus,
+    navigationRequests: SharedFlow<NavigationRequest>
 ) {
     val navController = rememberNavController()
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(navigationRequests, lifecycleOwner) {
+        // This owner is the Activity (outside NavHost). Cancel the collector on STOP so
+        // replay-free background taps cannot navigate after the Activity starts again.
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            navigationRequests.collect { request ->
+                val route = when (request) {
+                    NavigationRequest.LiveAI -> Screen.LiveAI.route
+                    NavigationRequest.LeanEat -> Screen.LeanEat.route
+                    NavigationRequest.OpenClaw -> Screen.OpenClaw.route
+                }
+                navController.navigate(route) { launchSingleTop = true }
+            }
+        }
+    }
 
     val bottomNavItems = listOf(
         BottomNavItem.Home,
@@ -208,6 +232,11 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToOpenClawSettings = {
                         navController.navigate(Screen.OpenClawSettings.route)
+                    },
+                    onNavigateToGlassesDisplayPreview = {
+                        if (GlassesDisplayPreviewEntry.isAvailable) {
+                            navController.navigate(Screen.GlassesDisplayPreview.route)
+                        }
                     }
                 )
             }
@@ -267,6 +296,12 @@ fun TurboMetaNavigation(
                         navController.popBackStack()
                     }
                 )
+            }
+
+            if (GlassesDisplayPreviewEntry.isAvailable) {
+                composable(Screen.GlassesDisplayPreview.route) {
+                    GlassesDisplayPreviewEntry.Screen(onBackClick = { navController.popBackStack() })
+                }
             }
 
             composable(Screen.OpenClaw.route) {

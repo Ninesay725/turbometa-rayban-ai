@@ -42,6 +42,11 @@ fun LeanEatScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val isAnalyzing by viewModel.isAnalyzing.collectAsState()
 
+    DisposableEffect(viewModel) {
+        // Navigation can retain the ViewModel after this screen stops owning the display.
+        onDispose { viewModel.reset() }
+    }
+
     // Update captured image when frame is available
     LaunchedEffect(currentFrame) {
         currentFrame?.let { viewModel.setCapturedImage(it) }

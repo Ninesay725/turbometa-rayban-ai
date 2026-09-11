@@ -15,6 +15,7 @@ import com.smartview.glassai.glasses.FakeDatDeviceObserver
 import com.smartview.glassai.glasses.FakeDatSessionFactory
 import com.smartview.glassai.glasses.FakeRegistrationGateway
 import com.smartview.glassai.glasses.GlassesDeviceInfo
+import com.smartview.glassai.glasses.GlassesDisplayState
 import com.smartview.glassai.glasses.GlassesSessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,9 +24,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -52,6 +56,12 @@ class WearablesViewModelTest {
         compatibility = DeviceCompatibility.COMPATIBLE,
     )
 
+    private val displayGlasses = rayban.copy(
+        name = "Meta Ray-Ban Display",
+        deviceType = DeviceType.META_RAYBAN_DISPLAY,
+        isDisplayCapable = true,
+    )
+
     private fun str(id: Int) = "str:$id"
 
     @Before
@@ -69,9 +79,9 @@ class WearablesViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun newViewModel(): WearablesViewModel = WearablesViewModel(
+    private fun newViewModel(sessionManager: GlassesSessionManager = manager): WearablesViewModel = WearablesViewModel(
         application = Application(),
-        sessionManager = manager,
+        sessionManager = sessionManager,
         registration = registration,
         strings = ::str,
         videoQuality = { VideoQuality.MEDIUM },
@@ -231,5 +241,62 @@ class WearablesViewModelTest {
         assertNull(vm.errorMessage.value)
         assertEquals(listOf("boom"), received)
         job.cancel()
+    }
+
+    @Test
+    fun displayStateFollowsTheManager() {
+        observer.device.value = displayGlasses
+        val vm = newViewModel()
+        assertTrue(vm.isDisplayAvailable.value)
+        assertEquals(GlassesDisplayState.NOT_ATTACHED, vm.displayState.value)
+
+        manager.acquire("display-state-test")
+        try {
+            factory.last.emitStarted()
+            assertEquals(GlassesDisplayState.STARTING, vm.displayState.value)
+            factory.last.display.emitStarted()
+            assertEquals(GlassesDisplayState.STARTED, vm.displayState.value)
+            factory.last.display.emitStopped()
+            assertEquals(GlassesDisplayState.STOPPED, vm.displayState.value)
+        } finally {
+            manager.release("display-state-test")
+        }
+    }
+
+    @Test
+    fun isDisplayCapableFollowsTheActiveDevice() {
+        val vm = newViewModel()
+        observer.device.value = rayban
+        assertFalse(vm.isDisplayCapable.value)
+        observer.device.value = displayGlasses
+        assertTrue(vm.isDisplayCapable.value)
+        observer.device.value = null
+        assertFalse(vm.isDisplayCapable.value)
+    }
+
+    @Test
+    fun isDisplayAvailableIsFalseWhenTheSettingIsOff() = runTest(dispatcher) {
+        val disabledManager = GlassesSessionManager(
+            sessionFactory = factory,
+            deviceObserver = observer,
+            scope = backgroundScope,
+            displayEnabled = { false },
+        )
+        val vm = newViewModel(disabledManager)
+        observer.device.value = displayGlasses
+        runCurrent()
+        assertTrue(vm.isDisplayCapable.value)
+        assertFalse(vm.isDisplayAvailable.value)
+
+        disabledManager.acquire("display-disabled-test")
+        try {
+            factory.last.emitStarted()
+            runCurrent()
+            assertFalse(vm.isDisplayAvailable.value)
+            assertEquals(GlassesDisplayState.NOT_ATTACHED, vm.displayState.value)
+            assertEquals(0, factory.last.addDisplayCalls)
+        } finally {
+            disabledManager.release("display-disabled-test")
+        }
     }
 }

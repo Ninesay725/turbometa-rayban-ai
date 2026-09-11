@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.smartview.glassai.data.ConversationStorage
+import com.smartview.glassai.glasses.GlassesSessionManager
 import com.smartview.glassai.managers.AlibabaEndpoint
 import com.smartview.glassai.managers.AlibabaVisionModel
 import com.smartview.glassai.managers.APIProvider
@@ -63,6 +64,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val _apiKeyMasked = MutableStateFlow(getMaskedApiKey())
     val apiKeyMasked: StateFlow<String> = _apiKeyMasked.asStateFlow()
+
+    private val _isDisplayEnabled = MutableStateFlow(apiKeyManager.isGlassesDisplayEnabled())
+    val isDisplayEnabled: StateFlow<Boolean> = _isDisplayEnabled.asStateFlow()
+
+    fun setDisplayEnabled(enabled: Boolean) {
+        apiKeyManager.setGlassesDisplayEnabled(enabled)
+        GlassesSessionManager.getInstance(getApplication<Application>()).setDisplayEnabled(enabled)
+        _isDisplayEnabled.value = enabled
+    }
 
     // AI Model (for Live AI)
     private val _selectedModel = MutableStateFlow(providerManager.liveAIModel.value)

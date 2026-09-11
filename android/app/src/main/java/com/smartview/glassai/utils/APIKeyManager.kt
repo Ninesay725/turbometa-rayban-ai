@@ -349,6 +349,13 @@ class APIKeyManager(context: Context) {
         sharedPreferences.edit().remove(KEY_OPENCLAW_TOKEN).apply()
     }
 
+    fun isGlassesDisplayEnabled(): Boolean =
+        sharedPreferences.getBoolean("glasses_display_enabled", true)
+
+    fun setGlassesDisplayEnabled(enabled: Boolean) {
+        sharedPreferences.edit().putBoolean("glasses_display_enabled", enabled).apply()
+    }
+
     /** The 32-byte Ed25519 seed, stored as standard base64. */
     fun getOpenClawDeviceSeed(): ByteArray? = try {
         sharedPreferences.getString(KEY_OPENCLAW_DEVICE_SEED, null)

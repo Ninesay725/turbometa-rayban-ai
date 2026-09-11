@@ -171,7 +171,7 @@
 
 ### 📱 Android
 
-> ✅ Android 2.0.0 已包含 OpenClaw 集成（节点模式）、DAT SDK 0.9.0 与 Meta Ray-Ban Display 眼镜相机支持。配置步骤见 [`android/README.md`](android/README.md#-openclaw-integration--openclaw-集成)。
+> Android 2.0.0 开发分支已包含 OpenClaw 集成（节点模式）、DAT SDK 0.9.0，以及 Meta Ray-Ban Display 文本卡片实现（Live AI、Quick Vision、LeanEat、OpenClaw）。实际镜片与按钮尚待真机验收；微信与音乐桥接仍在后续路线中。配置与验证说明见 [`android/README.md`](android/README.md)。
 
 👉 [**前往下载 APK**](https://github.com/Turbo1123/turbometa-rayban-ai/releases)
 

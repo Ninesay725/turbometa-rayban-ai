@@ -1,0 +1,50 @@
+--------- beginning of main
+09-11 12:06:04.057  4403  4403 D GlassesSessionManager: acquire(InstrumentedTest, forCamera=false) owners=[InstrumentedTest] cameraIntents=[] stoppingPrevious=false
+09-11 12:06:04.065  4403  4403 D GlassesSessionManager: session state: IDLE
+09-11 12:06:04.066  4403  4403 D GlassesSessionManager: session state: STARTING
+09-11 12:06:04.119  4403  4403 D GlassesSessionManager: session state: STARTED
+09-11 12:06:04.138  4403  4403 D GlassesSessionManager: addCamera(InstrumentedTest) ok
+09-11 12:06:04.984  4403  4403 D GlassesSessionManager: stopCamera(InstrumentedTest)
+09-11 12:06:05.000  4403  4403 D GlassesSessionManager: camera.stop() took 15 ms
+09-11 12:06:05.001  4403  4403 D GlassesSessionManager: release(InstrumentedTest) owners=[] cameraIntents=[]
+09-11 12:06:05.001  4403  4403 D GlassesSessionManager: stopSession
+09-11 12:06:05.001  4403  4403 D GlassesSessionManager: camera.stop() took 0 ms
+09-11 12:06:05.004  4403  4403 D GlassesSessionManager: previous session reported STOPPED
+09-11 12:06:05.007  4403  4403 D GlassesSessionManager: session.stop() took 5 ms
+09-11 12:06:05.063  4403  4403 D GlassesSessionManager: acquire(InstrumentedTest, forCamera=false) owners=[InstrumentedTest] cameraIntents=[] stoppingPrevious=false
+09-11 12:06:05.064  4403  4403 D GlassesSessionManager: session state: IDLE
+09-11 12:06:05.064  4403  4403 D GlassesSessionManager: session state: STARTING
+09-11 12:06:05.068  4403  4403 D GlassesSessionManager: session state: STARTED
+09-11 12:06:05.069  4403  4403 D GlassesSessionManager: addCamera(InstrumentedTest) ok
+09-11 12:06:07.295  4403  4403 E GlassesSessionManager: session error: Session ended by device
+09-11 12:06:07.296  4403  4403 E GlassesSessionManager: session error: Session ended by device
+09-11 12:06:07.297  4403  4403 D GlassesSessionManager: session state: STOPPED
+09-11 12:06:07.297  4403  4403 D GlassesSessionManager: camera.stop() took 0 ms
+09-11 12:06:07.297  4403  4403 D GlassesSessionManager: release(InstrumentedTest) owners=[] cameraIntents=[]
+09-11 12:06:07.355  4403  4403 D GlassesSessionManager: acquire(OpenClawSnap, forCamera=true) owners=[OpenClawSnap] cameraIntents=[OpenClawSnap] stoppingPrevious=false
+09-11 12:06:07.356  4403  4403 D GlassesSessionManager: session state: IDLE
+09-11 12:06:07.356  4403  4403 D GlassesSessionManager: session state: STARTING
+09-11 12:06:07.360  4403  4403 D GlassesSessionManager: session state: STARTED
+09-11 12:06:07.362  4403  4403 D GlassesSessionManager: addCamera(OpenClawSnap) ok
+09-11 12:06:07.557  4403  4403 D GlassesSessionManager: stopCamera(OpenClawSnap)
+09-11 12:06:07.561  4403  4403 D GlassesSessionManager: camera.stop() took 3 ms
+09-11 12:06:07.561  4403  4403 D GlassesSessionManager: release(OpenClawSnap) owners=[] cameraIntents=[]
+09-11 12:06:07.561  4403  4403 D GlassesSessionManager: stopSession
+09-11 12:06:07.562  4403  4403 D GlassesSessionManager: camera.stop() took 0 ms
+09-11 12:06:07.564  4403  4403 D GlassesSessionManager: previous session reported STOPPED
+09-11 12:06:07.568  4403  4403 D GlassesSessionManager: session.stop() took 5 ms
+09-11 12:06:07.724  4403  4403 D GlassesSessionManager: acquire(InstrumentedTest, forCamera=false) owners=[InstrumentedTest] cameraIntents=[] stoppingPrevious=false
+09-11 12:06:07.725  4403  4403 D GlassesSessionManager: session state: IDLE
+09-11 12:06:07.726  4403  4403 D GlassesSessionManager: session state: STARTING
+09-11 12:06:07.731  4403  4403 D GlassesSessionManager: session state: STARTED
+09-11 12:06:07.731  4403  4403 D GlassesSessionManager: release(InstrumentedTest) owners=[] cameraIntents=[]
+09-11 12:06:07.732  4403  4403 D GlassesSessionManager: stopSession
+09-11 12:06:07.732  4403  4403 D GlassesSessionManager: camera.stop() took 0 ms
+09-11 12:06:07.735  4403  4403 D GlassesSessionManager: previous session reported STOPPED
+09-11 12:06:07.735  4403  4403 D GlassesSessionManager: session.stop() took 3 ms
+09-11 12:06:07.735  4403  4403 D GlassesSessionManager: acquire(display-feature, forCamera=false) owners=[display-feature] cameraIntents=[] stoppingPrevious=false
+09-11 12:06:07.736  4403  4403 D GlassesSessionManager: session state: IDLE
+09-11 12:06:07.736  4403  4403 D GlassesSessionManager: session state: STARTING
+09-11 12:06:27.743  4403  4403 D GlassesSessionManager: stopSession
+09-11 12:06:27.743  4403  4403 D GlassesSessionManager: camera.stop() took 0 ms
+09-11 12:06:27.744  4403  4403 D GlassesSessionManager: previous session reported STOPPED

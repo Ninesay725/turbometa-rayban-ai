@@ -7,14 +7,15 @@ import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamError
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
-import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceIdentifier
 import com.meta.wearable.dat.core.types.DeviceSessionError
 import com.meta.wearable.dat.core.types.RegistrationError
 import com.meta.wearable.dat.core.types.RegistrationState
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
+import com.meta.wearable.dat.display.types.DisplayError
+import com.meta.wearable.dat.display.types.DisplayState
+import com.meta.wearable.dat.display.views.ContentScope
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -38,6 +39,25 @@ sealed class PhotoCaptureResult {
     data class Failure(val error: CaptureError) : PhotoCaptureResult()
 }
 
+sealed class DisplaySendResult {
+    data object Sent : DisplaySendResult()
+    data class Failed(val error: DisplayError) : DisplaySendResult()
+}
+
+sealed class DisplayAddResult {
+    data class Success(val display: GlassesDisplay) : DisplayAddResult()
+    data class Failure(val error: DeviceSessionError) : DisplayAddResult()
+}
+
+/** One display capability. Both stop and close terminate it in DAT 0.9.0. */
+interface GlassesDisplay {
+    val state: StateFlow<DisplayState>
+    suspend fun sendContent(block: ContentScope.() -> Unit): DisplaySendResult
+    suspend fun clearDisplay(): DisplaySendResult
+    fun stop()
+    fun close()
+}
+
 /** One camera capability lent to exactly one owner. Wraps Camera + Camera.stream. */
 interface GlassesCamera {
     val streamState: StateFlow<DatStreamState>
@@ -54,11 +74,11 @@ interface GlassesCamera {
 interface GlassesSession {
     val state: StateFlow<DeviceSessionState>
     val errors: SharedFlow<DeviceSessionError>
-    /** The underlying SDK session (null in fakes). Phase C uses it for addDisplay(). */
-    val nativeSession: DeviceSession?
     fun start()
     fun stop()
     fun addCamera(config: StreamConfiguration): CameraAddResult
+    fun addDisplay(): DisplayAddResult
+    fun removeDisplay(): DeviceSessionError?
 }
 
 interface DatSessionFactory {
@@ -95,21 +115,4 @@ interface DatRegistrationGateway {
     /** @return null on success, else the SDK's localized description of the NavigationError. */
     fun openDATGlassesAppUpdate(activity: Activity): String?
     suspend fun checkCameraPermission(): CameraPermissionCheck
-}
-
-/**
- * Phase C extension point. GlassesSessionManager calls maybeAttach() every time the session
- * reaches STARTED and detach() before the session stops. Phase A ships only [None].
- */
-interface DisplayAttacher {
-    val displayState: StateFlow<GlassesDisplayState>
-    fun maybeAttach(session: GlassesSession, device: GlassesDeviceInfo?)
-    fun detach()
-
-    object None : DisplayAttacher {
-        override val displayState: StateFlow<GlassesDisplayState> =
-            MutableStateFlow(GlassesDisplayState.NOT_ATTACHED)
-        override fun maybeAttach(session: GlassesSession, device: GlassesDeviceInfo?) = Unit
-        override fun detach() = Unit
-    }
 }

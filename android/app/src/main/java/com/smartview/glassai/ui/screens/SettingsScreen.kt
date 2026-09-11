@@ -39,7 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.smartview.glassai.BuildConfig
 import com.smartview.glassai.R
+import com.smartview.glassai.debug.GlassesDisplayPreviewEntry
 import com.smartview.glassai.debug.MockDeviceKitEntry
+import com.smartview.glassai.glasses.GlassesSessionManager
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.smartview.glassai.managers.AlibabaEndpoint
@@ -68,10 +70,13 @@ fun SettingsScreen(
     onNavigateToQuickVisionMode: () -> Unit = {},
     onNavigateToLiveAIMode: () -> Unit = {},
     onNavigateToMockDeviceKit: () -> Unit = {},
-    onNavigateToOpenClawSettings: () -> Unit = {}
+    onNavigateToOpenClawSettings: () -> Unit = {},
+    onNavigateToGlassesDisplayPreview: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val openClawState by remember { OpenClawNodeService.getInstance(context) }.connectionState.collectAsState()
+    val activeDevice by remember(context) { GlassesSessionManager.getInstance(context) }.activeDevice.collectAsState()
+    val isDisplayEnabled by viewModel.isDisplayEnabled.collectAsState()
 
     // Provider states
     val visionProvider by viewModel.visionProvider.collectAsState()
@@ -373,6 +378,19 @@ fun SettingsScreen(
                 )
             }
 
+            SettingsSection(title = stringResource(R.string.display_section)) {
+                SettingsToggleItem(
+                    icon = Icons.Default.Visibility,
+                    title = stringResource(R.string.display_enabled),
+                    subtitle = stringResource(
+                        if (activeDevice?.isDisplayCapable == false) R.string.display_status_unsupported
+                        else R.string.display_enabled_desc
+                    ),
+                    checked = isDisplayEnabled,
+                    onCheckedChange = viewModel::setDisplayEnabled
+                )
+            }
+
             // AI Settings Section
             SettingsSection(title = stringResource(R.string.settings_ai)) {
                 // App Language (界面语言)
@@ -435,14 +453,27 @@ fun SettingsScreen(
             }
 
             // Developer Section (debug builds only)
-            if (BuildConfig.DEBUG && MockDeviceKitEntry.isAvailable) {
+            if (BuildConfig.DEBUG && (MockDeviceKitEntry.isAvailable || GlassesDisplayPreviewEntry.isAvailable)) {
                 SettingsSection(title = stringResource(R.string.settings_developer)) {
-                    SettingsItem(
-                        icon = Icons.Default.BugReport,
-                        title = stringResource(R.string.mock_device_kit_title),
-                        subtitle = stringResource(R.string.mock_device_kit_subtitle),
-                        onClick = onNavigateToMockDeviceKit
-                    )
+                    if (MockDeviceKitEntry.isAvailable) {
+                        SettingsItem(
+                            icon = Icons.Default.BugReport,
+                            title = stringResource(R.string.mock_device_kit_title),
+                            subtitle = stringResource(R.string.mock_device_kit_subtitle),
+                            onClick = onNavigateToMockDeviceKit
+                        )
+                    }
+                    if (GlassesDisplayPreviewEntry.isAvailable) {
+                        if (MockDeviceKitEntry.isAvailable) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = AppSpacing.medium))
+                        }
+                        SettingsItem(
+                            icon = Icons.Default.Visibility,
+                            title = stringResource(R.string.display_preview_title),
+                            subtitle = stringResource(R.string.display_preview_subtitle),
+                            onClick = onNavigateToGlassesDisplayPreview
+                        )
+                    }
                 }
             }
 
