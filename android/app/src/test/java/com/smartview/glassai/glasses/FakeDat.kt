@@ -122,7 +122,13 @@ class FakeDatSessionFactory : DatSessionFactory {
 
 class FakeDatDeviceObserver : DatDeviceObserver {
     val device = MutableStateFlow<GlassesDeviceInfo?>(null)
-    override fun activeDeviceInfoFlow(): Flow<GlassesDeviceInfo?> = device
+    /** When true, activeDeviceInfoFlow() throws synchronously instead of returning a flow. */
+    var throwOnFlow = false
+
+    override fun activeDeviceInfoFlow(): Flow<GlassesDeviceInfo?> {
+        if (throwOnFlow) error("activeDeviceInfoFlow() boom (throwOnFlow)")
+        return device
+    }
 }
 
 class RecordingDisplayAttacher : DisplayAttacher {

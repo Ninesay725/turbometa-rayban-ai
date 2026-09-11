@@ -8,7 +8,9 @@ import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceSessionError
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -149,18 +151,43 @@ class GlassesSessionManager internal constructor(
     val currentCameraOwner: String?
         get() = cameraOwner
 
-    /** Starts observing the active device. Idempotent. */
+    /**
+     * Starts observing the active device. Idempotent.
+     *
+     * OpenClawIntegration.install() calls this from Application.onCreate(), before Bluetooth
+     * permissions are granted (Task 4 fix round 1). The `.catch {}` below only guards the flow's
+     * *collection*; it does nothing for a `deviceObserver.activeDeviceInfoFlow()` call that throws
+     * synchronously while constructing the flow (Task 4 fix round 2, re-review hardening note).
+     * That construction + the collection are both wrapped in `runCatching` so such a throw is
+     * logged instead of escaping the launched coroutine, and `deviceJob` is nulled out on failure so
+     * a later `startMonitoring()` call retries instead of silently no-op'ing forever.
+     *
+     * Started LAZY and only `.start()`-ed after `deviceJob` is assigned: with an immediate/unconfined
+     * dispatcher (Dispatchers.Main.immediate in production, UnconfinedTestDispatcher in tests) a
+     * throw-before-first-suspension body runs to completion inside the `launch {}` call itself, so
+     * `deviceJob = scope.launch { ... }` would overwrite the `deviceJob = null` the failure handler
+     * just set — leaving `deviceJob` non-null and every later `startMonitoring()` a permanent no-op.
+     * Assigning first, then starting, makes the null-out stick.
+     */
     fun startMonitoring() {
         if (deviceJob != null) return
-        deviceJob = scope.launch {
-            deviceObserver.activeDeviceInfoFlow()
-                // Without this the SupervisorJob swallows the failure and activeDevice would stay
-                // null forever with nothing in the log.
-                .catch { Log.e(TAG, "device flow failed", it) }
-                .collect { info ->
-                    _activeDevice.value = info
-                }
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            runCatching {
+                deviceObserver.activeDeviceInfoFlow()
+                    // Without this the SupervisorJob swallows the failure and activeDevice would
+                    // stay null forever with nothing in the log.
+                    .catch { Log.e(TAG, "device flow failed", it) }
+                    .collect { info ->
+                        _activeDevice.value = info
+                    }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                Log.e(TAG, "device monitoring failed to start", error)
+                deviceJob = null
+            }
         }
+        deviceJob = job
+        job.start()
     }
 
     /**

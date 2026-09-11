@@ -2,6 +2,7 @@ package com.smartview.glassai.glasses
 
 import android.graphics.Bitmap
 import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -103,9 +104,14 @@ class SessionFrameProviderTest {
     }
 
     /**
-     * Review pointer 1 (fix round 1): the frame an owner published before stopCamera() must never
-     * be served afterwards. liveFrame() requires a live camera owner, so with the claim gone the
-     * snap takes a fresh photo through the capturer instead of encoding the orphaned bitmap.
+     * State-transition guard, NOT a pin on the liveFrame() two-condition gate (Task 4 fix round 2,
+     * re-review finding): GlassesSessionManager.stopCamera() clears cameraOwner and _latestFrame in
+     * the same call, so a naive `liveFrame() = latestFrame.value` would already answer
+     * `hasFrame == false` / `streamStatus == "stopped"` here — this test cannot tell that from the
+     * real `currentCameraOwner != null && sessionState == STARTED` gate. It still guards the
+     * observable state transition (stop -> no frame -> capturer fallback) and remains valid as a
+     * regression test for that. See [frameIsNotServedWhileSessionIsPaused] for the test that
+     * actually pins the `sessionState == STARTED` half of the gate.
      */
     @Test
     fun staleFrameAfterStopCameraIsNotServed() = runTest(UnconfinedTestDispatcher()) {
@@ -129,6 +135,46 @@ class SessionFrameProviderTest {
         assertTrue(result is SnapshotResult.Ok)
         assertEquals(1, captureCalls)
         assertEquals(listOf(photo), encoded)
+    }
+
+    /**
+     * Pins the `sessionState == STARTED` half of the liveFrame() gate (Task 4 fix round 2,
+     * re-review finding): a PAUSED session still has a camera owner and an un-cleared latestFrame,
+     * so only the STARTED check can explain why the frame stops being served and the router falls
+     * back to NO_FRAME instead of replaying the stale frame. The owner half of the gate
+     * (`currentCameraOwner != null`) is structurally guaranteed by stopCamera() clearing
+     * currentCameraOwner and latestFrame together (see staleFrameAfterStopCameraIsNotServed's KDoc)
+     * and is intentionally not re-pinned here.
+     *
+     * Mutation check performed for this fix: removing `&& sessionState.value ==
+     * DeviceSessionState.STARTED` from GlassesFrameProvider.kt's private `liveFrame()` extension
+     * makes this test fail (hasFrame/streamStatus read the still-present latestFrame as live, and
+     * snapshot() returns Ok via the fast path instead of NoFrame); restoring the condition makes it
+     * pass again. See task-4-report.md "Fix round 2" for the recorded RED/GREEN output.
+     */
+    @Test
+    fun frameIsNotServedWhileSessionIsPaused() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        observer.device.value = rayban
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        val frame = TestBitmaps.stub()
+        manager.publishFrame("A", frame)
+
+        val provider = provider(manager)
+        assertTrue(provider.hasFrame)
+        assertEquals("streaming", provider.streamStatus)
+
+        factory.last.stateFlow.value = DeviceSessionState.PAUSED
+
+        assertFalse(provider.hasFrame)
+        assertEquals("waiting", provider.streamStatus)
+
+        val result = provider.snapshot(320, 0.6, 200)
+
+        assertEquals(SnapshotResult.NoFrame, result)
+        assertEquals(0, captureCalls)
     }
 
     /**

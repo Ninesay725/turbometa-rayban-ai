@@ -537,4 +537,38 @@ class GlassesSessionManagerTest {
         assertEquals(DeviceSessionState.STOPPED, manager.sessionState.value)
         assertFalse(manager.isStoppingPreviousSession)
     }
+
+    // ---- Task 4 fix round 2: startMonitoring() must survive a throwing device flow ----
+
+    /**
+     * OpenClawIntegration.install() calls startMonitoring() from Application.onCreate() before
+     * Bluetooth permissions are granted (Task 4 fix round 1). The existing `.catch {}` only guards
+     * the flow's *collection*; it does nothing for a DatDeviceObserver.activeDeviceInfoFlow() that
+     * throws synchronously while being constructed, which used to escape uncaught out of the
+     * launched coroutine. Pins: (1) the throw does not escape/crash the process, (2) the manager is
+     * left in a harmless, unmonitored state (no session, no active device), and (3) a later
+     * startMonitoring() call actually retries — deviceJob must have been nulled out, not left
+     * pointing at the dead job — and succeeds once the observer stops throwing.
+     */
+    @Test
+    fun startMonitoringSurvivesAThrowingDeviceFlow() = runTest(UnconfinedTestDispatcher()) {
+        observer.throwOnFlow = true
+        val manager = GlassesSessionManager(
+            sessionFactory = factory,
+            deviceObserver = observer,
+            scope = backgroundScope,
+            displayAttacher = attacher,
+        )
+
+        manager.startMonitoring() // must not throw out of this call
+
+        assertFalse(manager.hasSession)
+        assertNull(manager.activeDevice.value)
+
+        observer.throwOnFlow = false
+        observer.device.value = rayban
+        manager.startMonitoring() // must actually retry, not silently no-op
+
+        assertEquals(rayban, manager.activeDevice.value)
+    }
 }
