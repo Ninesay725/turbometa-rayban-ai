@@ -505,6 +505,7 @@
     <string name="openclaw_asr_error_mic">Microphone unavailable</string>
     <string name="openclaw_asr_error_connection">Connection failed</string>
     <string name="openclaw_asr_error_task">Speech recognition service error</string>
+    <string name="openclaw_asr_sco_timeout">Glasses microphone not ready, using phone microphone</string>
     <string name="openclaw_error_max_retries">Connection failed after %1$d retries</string>
     <string name="openclaw_error_transport">Connection error: %1$s</string>
     <string name="openclaw_error_invalid_url">Invalid gateway address</string>

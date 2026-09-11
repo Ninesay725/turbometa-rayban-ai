@@ -107,7 +107,8 @@ fun OpenClawChatScreen(
     val asrText by viewModel.asrText.collectAsState()
     val asrPartial by viewModel.asrPartial.collectAsState()
     val asrError by viewModel.asrError.collectAsState()
-    val currentAudioSource by viewModel.currentAudioSource.collectAsState()
+    val asrNotice by viewModel.asrNotice.collectAsState()
+    val audioSource by viewModel.desiredAudioSource.collectAsState()
     val isBluetoothAvailable by viewModel.isBluetoothAvailable.collectAsState()
     val isConnected = connectionState == OpenClawConnectionState.Connected
     val listState = rememberLazyListState()
@@ -211,7 +212,7 @@ fun OpenClawChatScreen(
             ) {
                 // Voice transcript box + Cancel / Send (shown while listening or when text remains)
                 val transcript = asrText + asrPartial
-                if (isListening || transcript.isNotEmpty() || asrError != null) {
+                if (isListening || transcript.isNotEmpty() || asrError != null || asrNotice != null) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -219,6 +220,16 @@ fun OpenClawChatScreen(
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .padding(AppSpacing.medium)
                     ) {
+                        // A notice (the glasses-mic fallback) is not an error: it sits above the
+                        // transcript instead of replacing it.
+                        asrNotice?.let { notice ->
+                            Text(
+                                text = notice,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(AppSpacing.extraSmall))
+                        }
                         Text(
                             text = when {
                                 asrError != null -> asrError!!
@@ -246,13 +257,13 @@ fun OpenClawChatScreen(
                 // Phone / glasses microphone (same semantics as Live AI)
                 Row(horizontalArrangement = Arrangement.spacedBy(AppSpacing.small)) {
                     FilterChip(
-                        selected = currentAudioSource == BluetoothAudioManager.AudioSource.PHONE_MIC,
+                        selected = audioSource == BluetoothAudioManager.AudioSource.PHONE_MIC,
                         onClick = { viewModel.switchAudioSource(BluetoothAudioManager.AudioSource.PHONE_MIC) },
                         label = { Text(stringResource(R.string.audio_source_phone)) },
                         leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp)) }
                     )
                     FilterChip(
-                        selected = currentAudioSource == BluetoothAudioManager.AudioSource.BLUETOOTH_MIC,
+                        selected = audioSource == BluetoothAudioManager.AudioSource.BLUETOOTH_MIC,
                         onClick = { viewModel.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC) },
                         enabled = isBluetoothAvailable,
                         label = { Text(stringResource(R.string.audio_source_glasses)) },

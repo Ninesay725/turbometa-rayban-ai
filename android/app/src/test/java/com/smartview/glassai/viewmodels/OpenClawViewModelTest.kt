@@ -21,6 +21,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -72,8 +74,22 @@ class OpenClawViewModelTest {
         override fun switchAudioSource(source: BluetoothAudioManager.AudioSource) { switched += source }
     }
 
+    /** Scriptable audio route: `sco` is the live SCO link, flipped the way the manager's receiver would. */
+    private class FakeAudioRoute : OpenClawAudioRoute {
+        override val bluetoothAvailable = MutableStateFlow(true)
+        val sco = MutableStateFlow(false)
+        override val scoConnected: StateFlow<Boolean> = sco
+        var startCalls = 0
+        var stopCalls = 0
+        var cleanupCalls = 0
+        override fun startSco() { startCalls++ }
+        override fun stopSco() { stopCalls++ }
+        override fun cleanup() { cleanupCalls++ }
+    }
+
     private val frames = FakeFrames()
     private val asr = FakeAsr()
+    private val route = FakeAudioRoute()
     private val asrCreatedWith = mutableListOf<Triple<String, AlibabaEndpoint, BluetoothAudioManager.AudioSource>>()
     private var alibabaKey: String? = "sk"
 
@@ -90,7 +106,7 @@ class OpenClawViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun newViewModel() = OpenClawViewModel(
+    private fun newViewModel(audioRoute: OpenClawAudioRoute? = null) = OpenClawViewModel(
         application = Application(),
         service = service,
         frames = frames,
@@ -101,7 +117,7 @@ class OpenClawViewModelTest {
         },
         alibabaKey = { alibabaKey },
         alibabaEndpoint = { AlibabaEndpoint.BEIJING },
-        bluetoothAudioManager = null,
+        audioRoute = audioRoute,
         strings = ::str,
         decodeImage = { TestBitmaps.stub() },
         decodeDispatcher = dispatcher, // keeps withContext(decodeDispatcher) on the test scheduler
@@ -229,12 +245,12 @@ class OpenClawViewModelTest {
 
     @Test
     fun switchingTheAudioSourceReachesTheRunningRecognizer() {
-        val vm = newViewModel() // no BluetoothAudioManager on the JVM: the fallback flow is used
+        val vm = newViewModel() // no audio route on the JVM: only the desired source moves
         vm.startListening()
 
         vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
 
-        assertEquals(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC, vm.currentAudioSource.value)
+        assertEquals(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC, vm.desiredAudioSource.value)
         assertEquals(listOf(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC), asr.switched)
     }
 
@@ -287,5 +303,109 @@ class OpenClawViewModelTest {
         assertFalse(vm.isListening.value)
         assertEquals(1, asr.stopCalls)
         assertEquals(0, manager.ownerCount)
+    }
+
+    @Test
+    fun desiredSourceSurvivesFinishListening() {
+        // The regression: finishListening() used to stop SCO, BluetoothAudioManager's
+        // SCO_AUDIO_STATE_DISCONNECTED receiver flipped its own source back to PHONE_MIC, and the
+        // chip (bound to that flow) snapped back — so the next utterance recorded from the phone.
+        val vm = newViewModel(route)
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
+        assertEquals(1, route.startCalls)
+        route.sco.value = true
+
+        vm.startListening()
+        vm.stopListening()
+
+        assertEquals(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC, vm.desiredAudioSource.value)
+        assertEquals(0, route.stopCalls) // SCO is session-scoped, never per utterance
+
+        vm.startListening() // the next utterance still opens on the glasses mic
+        assertEquals(
+            listOf(
+                BluetoothAudioManager.AudioSource.BLUETOOTH_MIC,
+                BluetoothAudioManager.AudioSource.BLUETOOTH_MIC,
+            ),
+            asrCreatedWith.map { it.third },
+        )
+
+        vm.leaveScreen()
+        assertEquals(1, route.stopCalls)
+    }
+
+    @Test
+    fun leaveScreenStopsSco() {
+        val vm = newViewModel(route)
+        vm.enterScreen()
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
+        assertEquals(1, route.startCalls)
+        assertEquals(0, route.stopCalls)
+
+        vm.leaveScreen()
+
+        assertEquals(1, route.stopCalls)
+        assertEquals(0, manager.ownerCount)
+    }
+
+    @Test
+    fun switchingBackToThePhoneMicStopsSco() {
+        val vm = newViewModel(route)
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
+
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.PHONE_MIC)
+
+        assertEquals(1, route.stopCalls)
+        assertEquals(BluetoothAudioManager.AudioSource.PHONE_MIC, vm.desiredAudioSource.value)
+    }
+
+    @Test
+    fun startListeningWaitsForScoBeforeStartingAsr() {
+        // AudioRecord on VOICE_COMMUNICATION before the SCO link exists records silence.
+        val vm = newViewModel(route)
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
+
+        vm.startListening()
+
+        assertTrue(vm.isListening.value)
+        assertEquals(0, asr.startCalls)
+        assertTrue(asrCreatedWith.isEmpty())
+
+        route.sco.value = true // SCO_AUDIO_STATE_CONNECTED
+
+        assertEquals(1, asr.startCalls)
+        assertEquals(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC, asrCreatedWith.single().third)
+        assertNull(vm.asrNotice.value)
+    }
+
+    @Test
+    fun scoTimeoutFallsBackToPhoneMicForThatUtterance() {
+        val vm = newViewModel(route)
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
+
+        vm.startListening()
+        assertEquals(0, asr.startCalls)
+
+        dispatcher.scheduler.advanceUntilIdle() // the bounded wait elapses, SCO never connects
+
+        assertEquals(1, asr.startCalls)
+        assertEquals(BluetoothAudioManager.AudioSource.PHONE_MIC, asrCreatedWith.single().third)
+        assertEquals(str(R.string.openclaw_asr_sco_timeout), vm.asrNotice.value)
+        // Fallback is for this utterance only: the user's choice is untouched.
+        assertEquals(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC, vm.desiredAudioSource.value)
+    }
+
+    @Test
+    fun sendAsrTextClearsTheAsrError() {
+        val vm = newViewModel()
+        vm.startListening()
+        asr.onFinalResult!!("hello")
+        asr.onError!!("boom")
+        assertEquals(str(R.string.openclaw_chat_asr_failed), vm.asrError.value)
+
+        vm.sendAsrText()
+
+        assertNull(vm.asrError.value)
+        assertEquals("hello", vm.messages.value.single().text)
     }
 }

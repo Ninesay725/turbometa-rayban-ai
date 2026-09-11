@@ -31,8 +31,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * State for OpenClawChatScreen (research §5.1). Messages live only in memory (spec §3 decision 3).
@@ -47,7 +49,7 @@ class OpenClawViewModel internal constructor(
     private val asrFactory: (String, AlibabaEndpoint, BluetoothAudioManager.AudioSource) -> SpeechRecognizerSession,
     private val alibabaKey: () -> String?,
     private val alibabaEndpoint: () -> AlibabaEndpoint,
-    private val bluetoothAudioManager: BluetoothAudioManager?,
+    private val audioRoute: OpenClawAudioRoute?,
     private val strings: (Int) -> String,
     private val decodeImage: (ByteArray) -> Bitmap?,
     /** Where the snapped JPEG is decoded into the bubble bitmap (never Main in the app). */
@@ -78,7 +80,7 @@ class OpenClawViewModel internal constructor(
             APIProviderManager.getInstance(application)
             APIProviderManager.staticAlibabaEndpoint
         },
-        bluetoothAudioManager = BluetoothAudioManager(application),
+        audioRoute = BluetoothAudioRoute(BluetoothAudioManager(application)),
         strings = { id -> application.getString(id) },
         decodeImage = { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) },
     )
@@ -89,6 +91,10 @@ class OpenClawViewModel internal constructor(
         private const val SNAP_MAX_WIDTH = 1600
         private const val SNAP_QUALITY = 0.7
         private const val SNAP_TIMEOUT_MS = 5_000L
+
+        /** Bounded wait for the SCO link before the recognizer opens its AudioRecord. */
+        @VisibleForTesting
+        internal const val SCO_WAIT_MS = 3_000L
 
         /** FunASRService's wire/log-level English texts, mapped to localized resources for the UI. */
         private val ASR_ERROR_STRINGS: Map<String, Int> = mapOf(
@@ -130,11 +136,22 @@ class OpenClawViewModel internal constructor(
     private val _asrError = MutableStateFlow<String?>(null)
     val asrError: StateFlow<String?> = _asrError.asStateFlow()
 
-    private val fallbackAudioSource = MutableStateFlow(BluetoothAudioManager.AudioSource.PHONE_MIC)
-    val currentAudioSource: StateFlow<BluetoothAudioManager.AudioSource> =
-        bluetoothAudioManager?.currentAudioSource ?: fallbackAudioSource
+    /** Non-fatal voice notice (currently: the SCO fallback), shown next to the live transcript. */
+    private val _asrNotice = MutableStateFlow<String?>(null)
+    val asrNotice: StateFlow<String?> = _asrNotice.asStateFlow()
+
+    private val _desiredAudioSource = MutableStateFlow(BluetoothAudioManager.AudioSource.PHONE_MIC)
+
+    /**
+     * The microphone the user chose, owned here and never read back from BluetoothAudioManager:
+     * the manager's own currentAudioSource tracks the *live* SCO link and falls back to PHONE_MIC
+     * the instant SCO drops, so binding the chip to it made the selection disappear between
+     * utterances and silently recorded the next one from the phone.
+     */
+    val desiredAudioSource: StateFlow<BluetoothAudioManager.AudioSource> = _desiredAudioSource.asStateFlow()
+
     val isBluetoothAvailable: StateFlow<Boolean> =
-        bluetoothAudioManager?.isBluetoothScoAvailable ?: MutableStateFlow(false)
+        audioRoute?.bluetoothAvailable ?: MutableStateFlow(false)
 
     /** Test hook: how many chat.send calls the Connected gate suppressed. */
     @VisibleForTesting
@@ -143,7 +160,11 @@ class OpenClawViewModel internal constructor(
 
     private var asr: SpeechRecognizerSession? = null
     private var chatJob: Job? = null
+    private var listenJob: Job? = null
     private var sessionHeld = false
+
+    /** True while this ViewModel is holding the SCO link open for the chat session. */
+    private var scoHeld = false
 
     private fun str(@StringRes id: Int): String = strings(id)
 
@@ -168,6 +189,7 @@ class OpenClawViewModel internal constructor(
 
     fun leaveScreen() {
         stopListening()
+        releaseSco()
         flushPendingResponse()
         if (sessionHeld) {
             sessionHeld = false
@@ -280,11 +302,27 @@ class OpenClawViewModel internal constructor(
         _asrText.value = ""
         _asrPartial.value = ""
         _asrError.value = null
-        val source = currentAudioSource.value
-        // FunASRService.switchAudioSource only swaps the PCM source; SCO is the caller's job (as in
-        // Live AI). Idempotent: BluetoothAudioManager.startBluetoothSco() no-ops when SCO is up.
+        _asrNotice.value = null
+        _isListening.value = true
+        listenJob = viewModelScope.launch { beginListening(key) }
+    }
+
+    /**
+     * Arms the audio route, waits (bounded) for it, then builds and starts the recognizer.
+     * Suspending because the SCO link is asynchronous: an AudioRecord opened on
+     * VOICE_COMMUNICATION before SCO connects records silence for the whole utterance.
+     */
+    private suspend fun beginListening(key: String) {
+        var source = _desiredAudioSource.value
         if (source == BluetoothAudioManager.AudioSource.BLUETOOTH_MIC) {
-            bluetoothAudioManager?.startBluetoothSco()
+            holdSco() // no-op when SCO is already held for this chat session
+            if (!awaitScoRoute()) {
+                Log.w(TAG, "SCO not connected after $SCO_WAIT_MS ms; this utterance uses the phone mic")
+                _asrNotice.value = str(R.string.openclaw_asr_sco_timeout)
+                // Fallback for this utterance only - the choice stays BLUETOOTH_MIC so the next
+                // attempt (with the link up by then) goes back to the glasses.
+                source = BluetoothAudioManager.AudioSource.PHONE_MIC
+            }
         }
         // Named asrService on purpose: `service` is the OpenClawNodeService property.
         val asrService = asrFactory(key, alibabaEndpoint(), source).apply {
@@ -303,31 +341,56 @@ class OpenClawViewModel internal constructor(
             onFinished = { finishListening() }
         }
         asr = asrService
-        _isListening.value = true
         asrService.start()
+    }
+
+    /** True once the SCO link is up, false if it did not come up within [SCO_WAIT_MS]. */
+    private suspend fun awaitScoRoute(): Boolean {
+        val route = audioRoute ?: return false
+        if (route.scoConnected.value) return true
+        return withTimeoutOrNull(SCO_WAIT_MS) { route.scoConnected.first { it } } ?: false
     }
 
     /** Keeps the recognized text on screen so the user can review, then Send or Cancel. */
     fun stopListening() {
+        listenJob?.cancel() // it may still be waiting for the SCO route
+        listenJob = null
         val session = asr
         asr = null // cleared first so a stop()-triggered onFinished cannot re-enter stop()
         session?.stop()
         finishListening()
     }
 
-    /** Flags + audio route only; the recognizer is already (or is being) torn down. */
+    /** Flags only; the recognizer is already (or is being) torn down. */
     private fun finishListening() {
         asr = null
         _isListening.value = false
-        // Release the SCO link with the recognizer: an open SCO route keeps the phone in
-        // MODE_IN_COMMUNICATION and mutes media for the whole system.
-        bluetoothAudioManager?.stopBluetoothSco()
+        // SCO is deliberately NOT stopped here. It is scoped to the chat session (released by
+        // leaveScreen / onCleared, or by switching back to the phone mic): stopping it per
+        // utterance made BluetoothAudioManager's SCO_AUDIO_STATE_DISCONNECTED receiver reset its
+        // own source to PHONE_MIC, which reset the chip and the next utterance with it.
+    }
+
+    /** SCO is session-scoped: armed on selection or on the first listen, held across utterances. */
+    private fun holdSco() {
+        if (scoHeld) return
+        scoHeld = true
+        audioRoute?.startSco()
+    }
+
+    /** An open SCO route keeps the phone in MODE_IN_COMMUNICATION and mutes system media. */
+    private fun releaseSco() {
+        if (!scoHeld) return
+        scoHeld = false
+        audioRoute?.stopSco()
     }
 
     fun sendAsrText() {
         val text = (_asrText.value + _asrPartial.value).trim()
         _asrText.value = ""
         _asrPartial.value = ""
+        _asrError.value = null
+        _asrNotice.value = null
         if (text.isEmpty()) return
         flushPendingResponse()
         append(OpenClawChatMessage(role = OpenClawChatMessage.ROLE_USER, text = text))
@@ -339,6 +402,7 @@ class OpenClawViewModel internal constructor(
         _asrText.value = ""
         _asrPartial.value = ""
         _asrError.value = null
+        _asrNotice.value = null
     }
 
     /**
@@ -351,9 +415,13 @@ class OpenClawViewModel internal constructor(
         ASR_ERROR_STRINGS[raw]?.let { str(it) } ?: raw
 
     fun switchAudioSource(source: BluetoothAudioManager.AudioSource) {
-        // BluetoothAudioManager.switchAudioSource starts SCO for BLUETOOTH_MIC and stops it for
-        // PHONE_MIC, so the audio route and the recognizer's PCM source move together.
-        bluetoothAudioManager?.switchAudioSource(source) ?: run { fallbackAudioSource.value = source }
+        _desiredAudioSource.value = source
+        _asrNotice.value = null
+        when (source) {
+            // Arm the link now, so the route is up before the mic button is ever pressed.
+            BluetoothAudioManager.AudioSource.BLUETOOTH_MIC -> holdSco()
+            BluetoothAudioManager.AudioSource.PHONE_MIC -> releaseSco()
+        }
         asr?.switchAudioSource(source)
     }
 
@@ -365,6 +433,35 @@ class OpenClawViewModel internal constructor(
         super.onCleared()
         chatJob?.cancel()
         leaveScreen()
-        bluetoothAudioManager?.cleanup()
+        audioRoute?.cleanup()
     }
+}
+
+/**
+ * The audio-route seam this ViewModel needs from [BluetoothAudioManager]. Split out so the JVM
+ * tests can drive the SCO link (the manager itself wraps AudioManager plus a BroadcastReceiver and
+ * cannot be built off-device), and so the *live route* signal stays separate from the microphone
+ * the user chose.
+ */
+interface OpenClawAudioRoute {
+    /** A headset able to carry SCO is connected. */
+    val bluetoothAvailable: StateFlow<Boolean>
+
+    /** The SCO link is actually up - the live route, not the user's choice. */
+    val scoConnected: StateFlow<Boolean>
+
+    fun startSco()
+
+    fun stopSco()
+
+    fun cleanup()
+}
+
+/** Production adapter: every member is an existing [BluetoothAudioManager] API. */
+class BluetoothAudioRoute(private val manager: BluetoothAudioManager) : OpenClawAudioRoute {
+    override val bluetoothAvailable: StateFlow<Boolean> get() = manager.isBluetoothScoAvailable
+    override val scoConnected: StateFlow<Boolean> get() = manager.isBluetoothScoConnected
+    override fun startSco() = manager.startBluetoothSco()
+    override fun stopSco() = manager.stopBluetoothSco()
+    override fun cleanup() = manager.cleanup()
 }

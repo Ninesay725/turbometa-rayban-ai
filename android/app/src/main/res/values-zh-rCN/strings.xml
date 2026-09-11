@@ -505,6 +505,7 @@
     <string name="openclaw_asr_error_mic">麦克风不可用</string>
     <string name="openclaw_asr_error_connection">连接失败</string>
     <string name="openclaw_asr_error_task">语音识别服务错误</string>
+    <string name="openclaw_asr_sco_timeout">眼镜麦克风未就绪，改用手机麦克风</string>
     <string name="openclaw_error_max_retries">连接失败，已重试 %1$d 次</string>
     <string name="openclaw_error_transport">连接错误：%1$s</string>
     <string name="openclaw_error_invalid_url">Gateway 地址无效</string>
