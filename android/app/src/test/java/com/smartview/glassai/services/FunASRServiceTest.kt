@@ -50,6 +50,9 @@ class FunASRServiceTest {
         override fun onOpen(webSocket: WebSocket, response: Response) { serverSocket = webSocket }
         override fun onMessage(webSocket: WebSocket, text: String) { textFrames.add(JsonParser.parseString(text).asJsonObject) }
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) { binaryFrames.add(bytes.toByteArray()) }
+        // Ack the client's close frame immediately so the handshake completes instead of stalling
+        // until MockWebServer.shutdown()'s internal 5 s termination wait.
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason) }
     }
 
     private fun newService(): FunASRService {
@@ -115,7 +118,13 @@ class FunASRServiceTest {
         service.stop() // stopping = true; finish-task sent; close scheduled
         assertNotNull(textFrames.poll(5, TimeUnit.SECONDS)) // finish-task
         server.shutdown()
-        Thread.sleep(700) // > CLOSE_DELAY_MS: whichever of onClosed/onFailure fires, no error surfaces
+        // No positive signal exists to latch on here: once stopping = true, neither onClosed nor
+        // onFailure invokes any SpeechRecognizerSession callback (finish() just clears internal
+        // state), so there is nothing but wall-clock time to wait on. Await a latch that is never
+        // counted down, bounded just past CLOSE_DELAY_MS (500 ms), rather than an unconditional
+        // Thread.sleep, then assert the negative outcome.
+        val settled = CountDownLatch(1)
+        settled.await(700, TimeUnit.MILLISECONDS)
 
         assertTrue("unexpected errors: $errors", errors.isEmpty())
         assertFalse(service.isListening.value)
@@ -147,10 +156,11 @@ class FunASRServiceTest {
         val partials = mutableListOf<String>()
         val finals = mutableListOf<String>()
         val started = CountDownLatch(1)
+        val finalReceived = CountDownLatch(1)
         val finished = CountDownLatch(1)
         service.onStarted = { started.countDown() }
         service.onPartialResult = { partials += it }
-        service.onFinalResult = { finals += it }
+        service.onFinalResult = { finals += it; finalReceived.countDown() }
         service.onFinished = { finished.countDown() }
 
         service.start()
@@ -191,8 +201,7 @@ class FunASRServiceTest {
         // 3. results: end_time null/0 = partial, > 0 = final
         serverSocket!!.send("""{"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"你好","end_time":null}}}}""")
         serverSocket!!.send("""{"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"你好世界","end_time":1234}}}}""")
-        val deadline = System.currentTimeMillis() + 5_000
-        while (finals.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertTrue(finalReceived.await(5, TimeUnit.SECONDS))
         assertEquals(listOf("你好"), partials)
         assertEquals(listOf("你好世界"), finals)
 
