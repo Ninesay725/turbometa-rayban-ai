@@ -93,9 +93,9 @@ class OpenClawCommandRouter(
         }
     }
 
-    private fun cameraList(request: OpenClawNodeInvokeRequest): OpenClawNodeInvokeResult {
+    private suspend fun cameraList(request: OpenClawNodeInvokeRequest): OpenClawNodeInvokeResult {
         val cameras = JsonArray()
-        if (frames.hasActiveDevice) {
+        if (frames.awaitActiveDevice()) {
             cameras.add(JsonObject().apply {
                 addProperty("id", "rayban-main")
                 addProperty("name", "Ray-Ban Meta Camera")
@@ -106,9 +106,9 @@ class OpenClawCommandRouter(
         return OpenClawNodeInvokeResult.success(request.id, JsonObject().apply { add("cameras", cameras) })
     }
 
-    private fun deviceStatus(request: OpenClawNodeInvokeRequest): OpenClawNodeInvokeResult =
+    private suspend fun deviceStatus(request: OpenClawNodeInvokeRequest): OpenClawNodeInvokeResult =
         OpenClawNodeInvokeResult.success(request.id, JsonObject().apply {
-            addProperty("deviceConnected", frames.hasActiveDevice)
+            addProperty("deviceConnected", frames.awaitActiveDevice())
             addProperty("isStreaming", frames.isStreaming)
             addProperty("streamStatus", frames.streamStatus)
             addProperty("hasVideoFrame", frames.hasFrame)

@@ -35,7 +35,14 @@ sealed class SnapshotResult {
  * [SessionFrameProvider] in the app and by fakes in tests.
  */
 interface GlassesFrameProvider {
-    val hasActiveDevice: Boolean
+    /**
+     * True when glasses are connected. Suspending on purpose (Task 4 review finding 1): the
+     * manager fills its activeDevice StateFlow from an observer job, so a node command that is the
+     * first getInstance() caller would read null although glasses are connected — camera.list
+     * would answer `{"cameras":[]}` and device.status `deviceConnected:false` exactly once per
+     * process. Waits up to [timeoutMs] for the first emission, like GlassesPhotoCapturer.capture().
+     */
+    suspend fun awaitActiveDevice(timeoutMs: Long = DEFAULT_DEVICE_WAIT_MS): Boolean
     /** iOS parity: true while "streaming" or "waiting". */
     val isStreaming: Boolean
     /** "streaming" | "waiting" | "stopped". */
@@ -44,22 +51,35 @@ interface GlassesFrameProvider {
 
     /** Scales to [maxWidth] (if wider), JPEG at [quality] (0.1..1.0), within [timeoutMs]. */
     suspend fun snapshot(maxWidth: Int, quality: Double, timeoutMs: Long): SnapshotResult
+
+    companion object {
+        /** Budget for the device flow's first emission; a node command must stay snappy. */
+        const val DEFAULT_DEVICE_WAIT_MS = 1_500L
+    }
 }
 
 /**
  * Frame source for OpenClaw (Phase A final review, Recommendation 2, design (b)):
  * 1. If a feature currently borrows the camera, the last frame it published to
  *    GlassesSessionManager.latestFrame is used (a snap during Live AI returns the live frame).
- * 2. If it borrows the camera but has not published yet, wait up to [timeoutMs] for a frame.
- * 3. If nobody holds the camera, borrow it briefly through GlassesPhotoCapturer (owner
- *    "OpenClawSnap"), which stops the camera and releases the claim before returning.
+ * 2. If any feature holds a claim (GlassesSessionManager.ownerCount > 0) but no live frame is
+ *    available yet, wait up to timeoutMs for its first frame and answer NO_FRAME on timeout.
+ * 3. Only when nobody claims the session at all is the camera borrowed through GlassesPhotoCapturer
+ *    (owner "OpenClawSnap"), which stops the camera and releases the claim before returning.
  * Never runs when no Activity is started (spec §1: no background camera.snap).
  *
+ * The 2/3 split is gated on ownerCount, not on currentCameraOwner (Task 4 review finding 2):
+ * cameraOwner is only set inside addCamera(), so a feature between acquire() and addCamera() (up
+ * to 12 s on a cold session) still looks owner-less. Entering the capturer there would let the
+ * snap win addCamera() and fail the user's feature with CameraBusy("OpenClawSnap"). Both
+ * directions therefore are: someone claims the session (QuickVision, Live AI, RTMP, …) → wait,
+ * then NO_FRAME, and the gateway retries; nobody claims it → borrow the camera and take a photo.
+ *
  * Known limit (documented in android/README.md): QuickVisionService borrows the camera for a few
- * seconds per wake-word capture and never publishes to latestFrame. A camera.snap that lands in
- * that window gets CameraBusy from the capturer, waits [timeoutMs] on latestFrame, and answers
- * NO_FRAME; the gateway simply retries. Live AI / Live Stream / RTMP do publish, so snaps during
- * those return the live frame.
+ * seconds per wake-word capture (through GlassesPhotoCapturer, which holds a claim for that whole
+ * window) and never publishes to latestFrame. A camera.snap that lands in that window takes
+ * direction 2 — it waits out its timeout on latestFrame and answers NO_FRAME; the gateway simply
+ * retries. Live AI / Live Stream / RTMP do publish, so snaps during those return the live frame.
  *
  * [sessionManager] is a provider so installing this at app start does not create the manager
  * before the Bluetooth runtime permissions are granted.
@@ -81,7 +101,9 @@ class SessionFrameProvider(
             val registration = WearablesRegistrationGateway(app)
             return SessionFrameProvider(
                 sessionManager = { GlassesSessionManager.getInstance(app) },
-                isForeground = { (app as? TurboMetaApplication)?.isInForeground ?: true },
+                // Fail closed: without the TurboMetaApplication counter we cannot prove an Activity
+                // is started, and spec §1 forbids a background camera.snap.
+                isForeground = { (app as? TurboMetaApplication)?.isInForeground ?: false },
                 checkPermission = { registration.checkCameraPermission() },
                 encode = ::encodeBitmap,
                 capture = { manager ->
@@ -118,8 +140,8 @@ class SessionFrameProvider(
         }
     }
 
-    override val hasActiveDevice: Boolean
-        get() = sessionManager().activeDevice.value != null
+    override suspend fun awaitActiveDevice(timeoutMs: Long): Boolean =
+        withTimeoutOrNull(timeoutMs) { sessionManager().activeDevice.first { it != null } } != null
 
     override val hasFrame: Boolean
         get() = sessionManager().liveFrame() != null
@@ -143,8 +165,9 @@ class SessionFrameProvider(
 
         manager.liveFrame()?.let { return encodeOrFail(it, maxWidth, quality) }
 
-        if (manager.currentCameraOwner != null) {
-            // Someone streams but has not decoded a frame yet: wait for the first one.
+        if (manager.ownerCount > 0) {
+            // A feature claims the session (it may still be between acquire() and addCamera()):
+            // never race it for the camera — wait for its first frame, then give up with NO_FRAME.
             val frame = manager.awaitLiveFrame(timeoutMs)
             return if (frame != null) encodeOrFail(frame, maxWidth, quality) else SnapshotResult.NoFrame
         }
@@ -199,6 +222,13 @@ private fun GlassesSessionManager.liveFrame(): Bitmap? =
         null
     }
 
-/** Suspends until [liveFrame] is available, at most [timeoutMs]; null on timeout. */
+/**
+ * Suspends until [liveFrame] is available, at most [timeoutMs]; null on timeout.
+ *
+ * The predicate tests the emitted value as well as [liveFrame]: first() returns `it`, so a
+ * predicate that only re-read the flow could be satisfied by a frame that landed between the
+ * emission and the predicate call and then return that stale null as the result (Task 4 review
+ * minor 5).
+ */
 private suspend fun GlassesSessionManager.awaitLiveFrame(timeoutMs: Long): Bitmap? =
-    withTimeoutOrNull(timeoutMs) { latestFrame.first { liveFrame() != null } }
+    withTimeoutOrNull(timeoutMs) { latestFrame.first { it != null && liveFrame() != null } }

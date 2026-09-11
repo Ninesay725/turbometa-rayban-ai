@@ -15,7 +15,8 @@ import org.junit.Test
 class OpenClawCommandRouterTest {
 
     private class FakeFrameProvider : GlassesFrameProvider {
-        override var hasActiveDevice = true
+        var hasActiveDevice = true
+        override suspend fun awaitActiveDevice(timeoutMs: Long): Boolean = hasActiveDevice
         override var streamStatus = "stopped"
         override var hasFrame = false
         override val isStreaming: Boolean get() = streamStatus != "stopped"

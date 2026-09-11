@@ -102,6 +102,52 @@ class SessionFrameProviderTest {
         assertFalse(provider(manager).isStreaming)
     }
 
+    /**
+     * Review pointer 1 (fix round 1): the frame an owner published before stopCamera() must never
+     * be served afterwards. liveFrame() requires a live camera owner, so with the claim gone the
+     * snap takes a fresh photo through the capturer instead of encoding the orphaned bitmap.
+     */
+    @Test
+    fun staleFrameAfterStopCameraIsNotServed() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        observer.device.value = rayban
+        manager.acquire("A")
+        factory.last.emitStarted()
+        manager.addCamera("A", config)
+        manager.publishFrame("A", TestBitmaps.stub())
+        manager.stopCamera("A")
+        manager.release("A")
+        val photo = TestBitmaps.stub()
+        captureOutcome = PhotoCaptureOutcome.Captured(photo, fromVideoFrame = false)
+
+        val provider = provider(manager)
+        assertEquals("stopped", provider.streamStatus)
+        assertFalse(provider.hasFrame)
+
+        val result = provider.snapshot(320, 0.6, 200)
+
+        assertTrue(result is SnapshotResult.Ok)
+        assertEquals(1, captureCalls)
+        assertEquals(listOf(photo), encoded)
+    }
+
+    /**
+     * Review finding 2 (fix round 1): a feature between acquire() and addCamera() reports no camera
+     * owner yet, but it does hold a claim. The capturer fallback must not race it for the camera —
+     * with claims outstanding the snap waits for the owner's first frame and answers NO_FRAME.
+     */
+    @Test
+    fun fallbackIsSkippedWhileAnotherOwnerHoldsAClaim() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        observer.device.value = rayban
+        manager.acquire("B") // claimed; addCamera() has not run yet, so currentCameraOwner is null
+
+        val result = provider(manager).snapshot(640, 0.8, 200)
+
+        assertEquals(SnapshotResult.NoFrame, result)
+        assertEquals(0, captureCalls)
+    }
+
     @Test
     fun deniedPermissionShortCircuitsBeforeCapture() = runTest(UnconfinedTestDispatcher()) {
         val manager = newManager()
