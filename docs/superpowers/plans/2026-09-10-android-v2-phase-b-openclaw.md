@@ -5233,7 +5233,7 @@ class OpenClawViewModelTest {
 
     private class FakeFrames : GlassesFrameProvider {
         var result: SnapshotResult = SnapshotResult.NoFrame
-        override val hasActiveDevice = true
+        override suspend fun awaitActiveDevice(timeoutMs: Long): Boolean = true
         override val isStreaming = false
         override val streamStatus = "stopped"
         override val hasFrame = false
