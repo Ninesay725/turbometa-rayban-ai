@@ -41,9 +41,13 @@ sealed interface DisplayCard {
         val foods: List<LeanEatFood>, val suggestions: List<String>, val page: Int = 0,
     ) : DisplayCard
     data class OpenClaw(val userText: String?, val replyText: String, val isFinal: Boolean, val page: Int = 0) : DisplayCard
-    /** Phase E supplies the content integrations for these placeholders. */
-    data class WeChat(val sender: String, val preview: String) : DisplayCard
-    data class Music(val title: String, val artist: String, val isPlaying: Boolean) : DisplayCard
+    data class WeChat(
+        val sender: String, val preview: String, val count: Int = 1, val timestamp: Long = 0, val page: Int = 0,
+    ) : DisplayCard
+    /** Album art is an in-memory JPEG, bounded to 240 pixels by the platform reader. */
+    data class Music(
+        val title: String, val artist: String, val isPlaying: Boolean, val app: String = "", val artJpeg: ByteArray? = null,
+    ) : DisplayCard
 
     companion object {
         const val PAGE_CHARS = 280
@@ -98,6 +102,7 @@ fun DisplayCard.pageCount(strings: DisplayStrings? = null): Int = when (this) {
     is DisplayCard.QuickVision -> resultPages().size
     is DisplayCard.OpenClaw -> replyPages().size
     is DisplayCard.LeanEat -> 1 + detailPages(strings?.kcal ?: "kcal").size
+    is DisplayCard.WeChat -> previewPages().size
     else -> 1
 }
 
@@ -107,6 +112,13 @@ internal fun DisplayCard.QuickVision.resultPages(): List<String> = paginate(
 
 internal fun DisplayCard.OpenClaw.replyPages(): List<String> = paginate(
     replyText, maxLines = DisplayLayout.bodyLines(hasUser = !userText.isNullOrBlank(), paged = true), columns = DisplayLayout.bodyColumns,
+)
+
+internal val DisplayCard.WeChat.hasMetadata: Boolean get() = count > 1 || timestamp > 0
+
+internal fun DisplayCard.WeChat.previewPages(): List<String> = paginate(
+    preview, maxLines = DisplayLayout.bodyLines(paged = true, metaLines = if (hasMetadata) 1 else 0),
+    columns = DisplayLayout.bodyColumns,
 )
 
 internal fun DisplayCard.LeanEat.detailText(kcal: String): String =

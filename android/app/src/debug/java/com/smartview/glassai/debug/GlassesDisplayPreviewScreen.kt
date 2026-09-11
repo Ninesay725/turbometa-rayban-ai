@@ -1,7 +1,9 @@
 package com.smartview.glassai.debug
 
 import android.app.Application
+import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -66,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -93,9 +96,12 @@ import com.smartview.glassai.glasses.NodeButtonStyle
 import com.smartview.glassai.glasses.NodeTextColor
 import com.smartview.glassai.glasses.NodeTextStyle
 import com.smartview.glassai.glasses.ResourceDisplayStrings
+import com.smartview.glassai.glasses.decodeDisplayImage
 import com.smartview.glassai.glasses.pageCount
 import com.smartview.glassai.glasses.toNode
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -239,6 +245,15 @@ private fun PreviewNode(node: DisplayNode, onAction: (DisplayAction) -> Unit, mo
             lineHeight = node.style.lineHeight.sp,
         )
         is DisplayNode.Icon -> PreviewIcon(node.icon, modifier, outline = node.outline)
+        is DisplayNode.Image -> {
+            var bitmap by remember(node) { mutableStateOf<Bitmap?>(null) }
+            LaunchedEffect(node) {
+                bitmap = withContext(Dispatchers.Default) { decodeDisplayImage(node) }
+            }
+            bitmap?.let {
+                Image(it.asImageBitmap(), contentDescription = null, modifier = modifier.size(node.size.dp))
+            }
+        }
         is DisplayNode.Button -> PreviewButton(node, onAction, modifier)
         is DisplayNode.ButtonGroup -> Row(
             modifier.fillMaxWidth().height(DisplayLayout.BUTTON_HEIGHT.dp),
@@ -350,6 +365,7 @@ private fun NodeAlignment.vertical(): Alignment.Vertical = when (this) {
 }
 
 private fun DisplayCard.previewPage(): Int = when (this) {
+    is DisplayCard.WeChat -> page
     is DisplayCard.QuickVision -> page
     is DisplayCard.LeanEat -> page
     is DisplayCard.OpenClaw -> page
@@ -359,6 +375,7 @@ private fun DisplayCard.previewPage(): Int = when (this) {
 private fun DisplayCard.withPreviewPage(page: Int, strings: DisplayStrings): DisplayCard {
     val boundedPage = page.coerceIn(0, pageCount(strings) - 1)
     return when (this) {
+        is DisplayCard.WeChat -> copy(page = boundedPage)
         is DisplayCard.QuickVision -> copy(page = boundedPage)
         is DisplayCard.LeanEat -> copy(page = boundedPage)
         is DisplayCard.OpenClaw -> copy(page = boundedPage)

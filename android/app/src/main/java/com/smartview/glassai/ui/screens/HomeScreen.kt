@@ -55,7 +55,8 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToLiveStream: () -> Unit = {},
     onNavigateToRTMPStream: () -> Unit = {},
-    onNavigateToOpenClaw: () -> Unit = {}
+    onNavigateToOpenClaw: () -> Unit = {},
+    onNavigateToNotificationBridge: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -390,7 +391,15 @@ fun HomeScreen(
                     )
                 }
 
-                // Row 3: LiveStream (wide card)
+                FeatureCardWide(
+                    title = stringResource(R.string.bridge_title),
+                    subtitle = stringResource(R.string.bridge_subtitle),
+                    icon = Icons.Default.Notifications,
+                    gradientColors = listOf(Primary, Secondary),
+                    onClick = onNavigateToNotificationBridge
+                )
+
+                // LiveStream (wide card)
                 FeatureCardWide(
                     title = stringResource(R.string.feature_livestream_title),
                     subtitle = stringResource(R.string.feature_livestream_subtitle),
@@ -408,7 +417,7 @@ fun HomeScreen(
                     }
                 )
 
-                // Row 4: RTMP Streaming (wide card) - Experimental
+                // RTMP Streaming (wide card) - Experimental
                 FeatureCardWide(
                     title = stringResource(R.string.feature_rtmp_title),
                     subtitle = stringResource(R.string.feature_rtmp_subtitle),

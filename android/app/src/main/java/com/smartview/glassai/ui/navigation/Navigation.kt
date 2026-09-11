@@ -47,6 +47,7 @@ sealed class Screen(val route: String) {
     object GlassesDisplayPreview : Screen("glasses_display_preview")
     object OpenClaw : Screen("openclaw")
     object OpenClawSettings : Screen("openclaw_settings")
+    object NotificationBridge : Screen("notification_bridge")
 }
 
 sealed class BottomNavItem(
@@ -164,6 +165,9 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToOpenClaw = {
                         navController.navigate(Screen.OpenClaw.route)
+                    },
+                    onNavigateToNotificationBridge = {
+                        navController.navigate(Screen.NotificationBridge.route) { launchSingleTop = true }
                     }
                 )
             }
@@ -237,8 +241,15 @@ fun TurboMetaNavigation(
                         if (GlassesDisplayPreviewEntry.isAvailable) {
                             navController.navigate(Screen.GlassesDisplayPreview.route)
                         }
+                    },
+                    onNavigateToNotificationBridge = {
+                        navController.navigate(Screen.NotificationBridge.route) { launchSingleTop = true }
                     }
                 )
+            }
+
+            composable(Screen.NotificationBridge.route) {
+                NotificationBridgeScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(Screen.Records.route) {

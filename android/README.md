@@ -317,3 +317,12 @@ mwdat_client_token=YOUR_CLIENT_TOKEN
 ```
 
 构建会从 `android/local.properties` 读取这两个可选键并写入清单；未设置时默认为 `0`（Meta AI 开发者模式）。
+# Notifications and music (Android)
+
+Open **Notifications & Music** from Home or Settings. WeChat previews and music integration default off. Android notification access is a separate explicit grant; it gives the listener access needed for Android's public notification/media-session APIs.
+
+WeChat support reads only notification previews from `com.tencent.mm`, keeps at most three in memory, and cannot reply or retrieve chat history, images or voice messages. Details hidden by WeChat and grouped summaries remain limited to the notification's supplied content. Removing/overwriting a notification, disabling the feature or disconnecting the listener clears its previews. Glasses cards appear only in an already-started Display session and expire after ten seconds or Done; an incoming message never creates a resident glasses session.
+
+Music controls use active media sessions for the editable package allowlist (defaults: NetEase `com.netease.cloudmusic`, Qishui `com.luna.music`). Playing sessions take priority. Embedded artwork is reduced to 240 pixels; no artwork URLs are fetched. Opening the phone page with music enabled holds a camera-free glasses session while the page is started. Leaving it releases that claim. Real package identities and media controls require the [physical-device checklist](../docs/superpowers/reviews/phase-e/hardware-checklist.md).
+
+The emulator-only fixture runner `tools/test-notification-bridge.ps1` temporarily grants this app notification access, exercises a test-owned media session and restores the grant. Build and install both debug/test APKs before running it. It never installs or drives the real third-party apps. Phase C's documented SDK restart stress hang remains open.

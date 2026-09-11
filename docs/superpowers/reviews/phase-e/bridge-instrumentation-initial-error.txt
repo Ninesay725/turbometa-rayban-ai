@@ -1,0 +1,318 @@
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.MediaBridgeInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+com.smartview.glassai.bridge.MediaBridgeInstrumentedTest:
+INSTRUMENTATION_STATUS: test=initializationError
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.MediaBridgeInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stack=java.lang.RuntimeException: Failed to instantiate test runner class androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner
+
+
+	at androidx.test.ext.junit.runners.AndroidJUnit4.throwInitializationError(AndroidJUnit4.java:129)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:121)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:82)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.<init>(AndroidJUnit4.java:56)
+	... 14 trimmed
+Caused by: java.lang.reflect.InvocationTargetException
+	at java.lang.reflect.Constructor.newInstance0(Native Method)
+	at java.lang.reflect.Constructor.newInstance(Constructor.java:343)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:112)
+	... 17 more
+Caused by: org.junit.runners.model.InvalidTestClassError: Invalid test class 'com.smartview.glassai.bridge.MediaBridgeInstrumentedTest':
+  1. Method enabledListenerReadsAndControlsATestOwnedMediaSession() should be void
+	at org.junit.runners.ParentRunner.validate(ParentRunner.java:525)
+	at org.junit.runners.ParentRunner.<init>(ParentRunner.java:92)
+	at org.junit.runners.BlockJUnit4ClassRunner.<init>(BlockJUnit4ClassRunner.java:74)
+	at androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner.<init>(AndroidJUnit4ClassRunner.java:50)
+	at androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner.<init>(AndroidJUnit4ClassRunner.java:55)
+	... 20 more
+
+INSTRUMENTATION_STATUS: stream=
+Error in initializationError(com.smartview.glassai.bridge.MediaBridgeInstrumentedTest):
+java.lang.RuntimeException: Failed to instantiate test runner class androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner
+
+
+	at androidx.test.ext.junit.runners.AndroidJUnit4.throwInitializationError(AndroidJUnit4.java:129)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:121)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:82)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.<init>(AndroidJUnit4.java:56)
+	... 14 trimmed
+Caused by: java.lang.reflect.InvocationTargetException
+	at java.lang.reflect.Constructor.newInstance0(Native Method)
+	at java.lang.reflect.Constructor.newInstance(Constructor.java:343)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:112)
+	... 17 more
+Caused by: org.junit.runners.model.InvalidTestClassError: Invalid test class 'com.smartview.glassai.bridge.MediaBridgeInstrumentedTest':
+  1. Method enabledListenerReadsAndControlsATestOwnedMediaSession() should be void
+	at org.junit.runners.ParentRunner.validate(ParentRunner.java:525)
+	at org.junit.runners.ParentRunner.<init>(ParentRunner.java:92)
+	at org.junit.runners.BlockJUnit4ClassRunner.<init>(BlockJUnit4ClassRunner.java:74)
+	at androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner.<init>(AndroidJUnit4ClassRunner.java:50)
+	at androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner.<init>(AndroidJUnit4ClassRunner.java:55)
+	... 20 more
+
+INSTRUMENTATION_STATUS: test=initializationError
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest:
+INSTRUMENTATION_STATUS: test=plainPreviewPreservesTitleTextAndPostTime
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=plainPreviewPreservesTitleTextAndPostTime
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=nonWeChatPackageIsRejectedBeforeReadingPreviewContent
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=nonWeChatPackageIsRejectedBeforeReadingPreviewContent
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=unreadableWeChatContentReturnsEmptyWithoutPropagatingItsException
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=unreadableWeChatContentReturnsEmptyWithoutPropagatingItsException
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=bigTextTakesPrecedenceOverTheShortPreviewWithoutTruncation
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=bigTextTakesPrecedenceOverTheShortPreviewWithoutTruncation
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=repostedMessagingStyleBundlesDeduplicateInTheInboxAndRemovalClearsTheirKey
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=repostedMessagingStyleBundlesDeduplicateInTheInboxAndRemovalClearsTheirKey
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=7
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=malformedMessageBundlesStillAllowThePublicTextFallback
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=7
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=malformedMessageBundlesStillAllowThePublicTextFallback
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=8
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=blankBigTextFallsBackToTextAndMissingSenderStaysEmpty
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=8
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=blankBigTextFallsBackToTextAndMissingSenderStaysEmpty
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=9
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=emptyMessagingStyleFallsBackToAnAvailableSummary
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=9
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=emptyMessagingStyleFallsBackToAnAvailableSummary
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=10
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=groupedSummaryPassesThroughWithoutInventingIndividualMessages
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=10
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=groupedSummaryPassesThroughWithoutInventingIndividualMessages
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=11
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=missingOrRedactedBodyDoesNotInventAMessageFromTheTitle
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=11
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=missingOrRedactedBodyDoesNotInventAMessageFromTheTitle
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=12
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=messagingStylePrefersNewestThreeMessagesAndIgnoresHistoricContent
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=12
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=messagingStylePrefersNewestThreeMessagesAndIgnoresHistoricContent
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=13
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=blankMessagingStyleEntriesAreSkippedAndMissingSenderUsesNotificationTitle
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.bridge.WeChatNotificationParserInstrumentedTest
+INSTRUMENTATION_STATUS: current=13
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=blankMessagingStyleEntriesAreSkippedAndMissingSenderUsesNotificationTitle
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=14
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+com.smartview.glassai.glasses.DisplayImageInstrumentedTest:
+INSTRUMENTATION_STATUS: test=invalidNonJpegOrOutOfBudgetImagesAreOmitted
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=14
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=invalidNonJpegOrOutOfBudgetImagesAreOmitted
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=15
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=portraitAndLandscapeArtAreLetterboxedInsideTheRequestedSquare
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=15
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=portraitAndLandscapeArtAreLetterboxedInsideTheRequestedSquare
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=16
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=validSquareJpegIsDecodedWithoutMutatingItsBytes
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=16
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=validSquareJpegIsDecodedWithoutMutatingItsBytes
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=17
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=artDecodeFailureKeepsTextAndControlsInTheMusicCard
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.smartview.glassai.glasses.DisplayImageInstrumentedTest
+INSTRUMENTATION_STATUS: current=17
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=17
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=artDecodeFailureKeepsTextAndControlsInTheMusicCard
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 0.116
+There was 1 failure:
+1) initializationError(com.smartview.glassai.bridge.MediaBridgeInstrumentedTest)
+java.lang.RuntimeException: Failed to instantiate test runner class androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner
+
+
+	at androidx.test.ext.junit.runners.AndroidJUnit4.throwInitializationError(AndroidJUnit4.java:129)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:121)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:82)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.<init>(AndroidJUnit4.java:56)
+	... 14 trimmed
+Caused by: java.lang.reflect.InvocationTargetException
+	at java.lang.reflect.Constructor.newInstance0(Native Method)
+	at java.lang.reflect.Constructor.newInstance(Constructor.java:343)
+	at androidx.test.ext.junit.runners.AndroidJUnit4.loadRunner(AndroidJUnit4.java:112)
+	... 17 more
+Caused by: org.junit.runners.model.InvalidTestClassError: Invalid test class 'com.smartview.glassai.bridge.MediaBridgeInstrumentedTest':
+  1. Method enabledListenerReadsAndControlsATestOwnedMediaSession() should be void
+	at org.junit.runners.ParentRunner.validate(ParentRunner.java:525)
+	at org.junit.runners.ParentRunner.<init>(ParentRunner.java:92)
+	at org.junit.runners.BlockJUnit4ClassRunner.<init>(BlockJUnit4ClassRunner.java:74)
+	at androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner.<init>(AndroidJUnit4ClassRunner.java:50)
+	at androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner.<init>(AndroidJUnit4ClassRunner.java:55)
+	... 20 more
+
+FAILURES!!!
+Tests run: 17,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

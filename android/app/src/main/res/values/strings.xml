@@ -550,4 +550,46 @@
     <string name="display_preview_title">Glasses display preview</string>
     <string name="display_preview_subtitle">Render display cards on the phone (debug only)</string>
     <string name="display_preview_actions_hint">Preview buttons run real app actions.</string>
+
+    <!-- Phase E Task 4: phone notification and music bridge -->
+    <string name="bridge_title">Notifications and music</string>
+    <string name="bridge_subtitle">WeChat previews and music controls</string>
+    <string name="bridge_access_title">Android notification access</string>
+    <string name="bridge_access_explanation">Both features are off by default. Notification access is a separate Android permission: granting it does not turn either feature on.</string>
+    <string name="bridge_access_granted">Notification access: allowed</string>
+    <string name="bridge_access_not_granted">Notification access: not allowed</string>
+    <string name="bridge_listener_connected">Notification service: connected</string>
+    <string name="bridge_listener_disconnected">Notification service: disconnected</string>
+    <string name="bridge_open_access_settings">Open notification access settings</string>
+    <string name="bridge_settings_unavailable">Unable to open Android notification access settings.</string>
+    <string name="bridge_access_required">Allow notification access in Android settings to use this feature.</string>
+    <string name="bridge_listener_waiting">Waiting for Android to connect the notification service.</string>
+    <string name="bridge_features_title">Choose features</string>
+    <string name="bridge_wechat_enabled">WeChat previews</string>
+    <string name="bridge_wechat_description">Show WeChat notification previews on glasses only when a session is already active and its display is ready.</string>
+    <string name="bridge_music_enabled">Music controls</string>
+    <string name="bridge_music_description">Control supported music apps. When enabled, this page keeps a glasses session open while visible, without using the camera.</string>
+    <string name="bridge_current_track">Current track</string>
+    <string name="bridge_music_disabled">Turn on music controls to show the current track.</string>
+    <string name="bridge_no_track">No active track from an allowed music app. Start playback in your music app.</string>
+    <string name="bridge_untitled_track">Untitled track</string>
+    <string name="bridge_playing">Playing</string>
+    <string name="bridge_paused">Paused</string>
+    <string name="bridge_previous">Previous track</string>
+    <string name="bridge_play">Play</string>
+    <string name="bridge_pause">Pause</string>
+    <string name="bridge_next">Next track</string>
+    <string name="bridge_controls_hint">Controls are available only when supported by the current music app.</string>
+    <string name="bridge_media_apps">Allowed music apps</string>
+    <string name="bridge_media_apps_description">Default packages are for NetEase Cloud Music and Qishui. Available controls depend on the music app.</string>
+    <string name="bridge_package_names">App package names</string>
+    <string name="bridge_packages_hint">One package name per line, for example com.netease.cloudmusic. An empty list allows no apps.</string>
+    <string name="bridge_packages_invalid">Enter one valid package name per line, such as com.luna.music.</string>
+    <string name="bridge_latest_messages">Latest WeChat previews</string>
+    <string name="bridge_messages_privacy">Up to three previews are kept in memory only, never saved or uploaded. Removing a notification removes its preview. Turning previews off or disconnecting the notification service clears them.</string>
+    <string name="bridge_wechat_disabled">Turn on WeChat previews to show incoming notifications here.</string>
+    <string name="bridge_no_messages">No WeChat previews available.</string>
+    <string name="bridge_content_unavailable">Notification content is unavailable.</string>
+    <string name="bridge_access_lost">Notification access was lost. Review notification access in Android settings.</string>
+    <string name="bridge_session_unavailable">The glasses session is unavailable. Check your glasses connection and try again.</string>
 </resources>

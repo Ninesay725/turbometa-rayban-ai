@@ -14,6 +14,7 @@ sealed interface NavigationRequest {
 
 interface LiveAiController { fun end() }
 interface OpenClawController { fun snapAndSend() }
+interface MusicController { fun playPause(); fun next(); fun previous() }
 
 /** Register in ViewModel init; unregister in onCleared without clearing a newer instance. */
 interface GlassesControllerRegistry {
@@ -35,6 +36,13 @@ class GlassesActionRouter(
 ) : GlassesControllerRegistry {
     private var liveAi: LiveAiController? = null
     private var openClaw: OpenClawController? = null
+    private var music: MusicController? = null
+
+    fun registerMusic(controller: MusicController) { checkMain(); music = controller }
+    fun unregisterMusic(controller: MusicController) {
+        checkMain()
+        if (music === controller) music = null
+    }
 
     override fun registerLiveAi(controller: LiveAiController) {
         checkMain()
@@ -76,8 +84,9 @@ class GlassesActionRouter(
             is DisplayAction.Page -> sink.showPage(action.card)
             DisplayAction.BackToMenu -> sink.showStatus()
             DisplayAction.OpenClawSnap -> openClaw?.snapAndSend() ?: navigate(NavigationRequest.OpenClaw)
-            DisplayAction.MusicPlayPause, DisplayAction.MusicNext, DisplayAction.MusicPrev ->
-                Log.i(TAG, "Music action deferred to Phase E: $action")
+            DisplayAction.MusicPlayPause -> music?.playPause()
+            DisplayAction.MusicNext -> music?.next()
+            DisplayAction.MusicPrev -> music?.previous()
         }
     }
 

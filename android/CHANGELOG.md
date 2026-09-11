@@ -1,5 +1,12 @@
 # Changelog
 
+## Android 2.0.0 development — notifications and music
+
+- Added opt-in WeChat notification previews and public MediaSession controls for configurable NetEase/Qishui packages.
+- Added notification-access guidance, phone controls and in-memory preview list; features default off.
+- Completed paged WeChat cards and bounded local album artwork. Notification cards use an existing live session only and release on Done/expiry.
+- Added parser, media-session, lifecycle and private-cache regressions. Real third-party/display checks and the documented DAT restart stress issue remain pending.
+
 ## [2.0.0] - 2026-09-10
 
 ### 新功能

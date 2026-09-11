@@ -3,11 +3,41 @@ package com.smartview.glassai.glasses
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DisplayCardTest {
     private val strings = FixedDisplayStrings(liveAi = "实时助手", leanEat = "轻食", openClaw = "龙虾助手")
+
+    @Test fun bridgeCardDefaultsKeepTheOldConstructorsUsable() {
+        val wechat = DisplayCard.WeChat("Sam", "hello")
+        assertEquals(1, wechat.count)
+        assertEquals(0L, wechat.timestamp)
+        assertEquals(0, wechat.page)
+        assertEquals(1, wechat.pageCount())
+        val music = DisplayCard.Music("Song", "Artist", true)
+        assertEquals("", music.app)
+        assertNull(music.artJpeg)
+    }
+
+    @Test fun mergedWechatPreviewPreservesAllThreeMessagesAndWhitespaceThroughPagination() {
+        val text = "  Sam: " + "hello ".repeat(60) + "\r\n\r\n小明：" + "你好😀".repeat(60) +
+            "\nAlex: " + List(20) { "line $it" }.joinToString("\n") + "  "
+        val card = DisplayCard.WeChat("Friends", text, count = 3, timestamp = 1_789_142_400_000L)
+        val pages = card.previewPages()
+        assertTrue(pages.size > 3)
+        assertEquals(pages.size, card.pageCount(strings))
+        assertEquals(text, pages.joinToString(""))
+        pages.forEach {
+            assertTrue(it.length <= DisplayCard.PAGE_CHARS)
+            assertTrue(conservativeDisplayLines(it, 19) <= 7)
+            assertFalse(it.first().isLowSurrogate())
+            assertFalse(it.last().isHighSurrogate())
+        }
+        assertEquals(text, card.plainText())
+        assertEquals(text, card.preview)
+    }
 
     @Test fun liveAiPlainTextIsTheAssistantText() {
         val text = "answer".repeat(100)

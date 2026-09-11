@@ -80,6 +80,50 @@ class GlassesDisplayManagerTest {
     private fun streaming(text: String, isFinal: Boolean = false) =
         DisplayCard.LiveAI(LiveAIPhase.SPEAKING, null, text, isFinal)
 
+    @Test fun detachedPrivatePreviewIsForgottenOnCleanup() = runTest(UnconfinedTestDispatcher()) {
+        val f = Fixture(this)
+        val sink = f.manager.ownedSink(Any())
+        sink.show(DisplayCard.WeChat("Fixture", "Private fixture")); f.start(); runCurrent()
+        assertTrue(f.manager.lastSent.value is DisplayCard.WeChat)
+        f.sessions.setDisplayEnabled(false)
+        sink.showStatus()
+        assertNull(f.manager.currentCard.value)
+        assertNull(f.manager.lastSent.value)
+    }
+
+    @Test fun supersededPrivateSendCannotRepopulateLastSent() = runTest(UnconfinedTestDispatcher()) {
+        val worker = QueuedSendDispatcher()
+        val f = Fixture(this, sendDispatcher = worker)
+        f.manager.show(DisplayCard.WeChat("Fixture", "Private fixture")); f.start(); runCurrent()
+        f.manager.clear()
+        worker.finishOne(); runCurrent()
+        assertNull(f.manager.lastSent.value)
+        while (worker.pendingCount > 0) { worker.finishOne(); runCurrent() }
+        assertNull(f.manager.currentCard.value)
+    }
+
+    @Test fun privateFallbackIsForgottenOnDetachedCleanup() = runTest(UnconfinedTestDispatcher()) {
+        val f = Fixture(this)
+        f.display.scriptedSendFailures += DisplayError.RENDERING_FAILED
+        f.manager.show(DisplayCard.WeChat("Fixture", "Private fixture")); f.start(); runCurrent()
+        assertTrue(f.manager.lastSent.value is DisplayCard.Notice)
+        f.sessions.setDisplayEnabled(false)
+        f.manager.showStatus()
+        assertNull(f.manager.lastSent.value)
+    }
+
+    @Test fun privateFallbackFinishingAfterClearCannotRestoreDetails() = runTest(UnconfinedTestDispatcher()) {
+        val worker = QueuedSendDispatcher()
+        val f = Fixture(this, sendDispatcher = worker)
+        f.display.scriptedSendFailures += DisplayError.RENDERING_FAILED
+        f.manager.show(DisplayCard.WeChat("Fixture", "Private fixture")); f.start(); runCurrent()
+        worker.finishOne(); runCurrent() // Failed render has queued the fallback Notice.
+        f.manager.clear()
+        worker.finishOne(); runCurrent()
+        assertNull(f.manager.lastSent.value)
+        while (worker.pendingCount > 0) { worker.finishOne(); runCurrent() }
+    }
+
     private inner class Fixture(
         testScope: TestScope,
         mainDispatcher: CoroutineDispatcher = UnconfinedTestDispatcher(testScope.testScheduler),

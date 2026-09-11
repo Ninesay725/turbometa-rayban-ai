@@ -71,7 +71,8 @@ fun SettingsScreen(
     onNavigateToLiveAIMode: () -> Unit = {},
     onNavigateToMockDeviceKit: () -> Unit = {},
     onNavigateToOpenClawSettings: () -> Unit = {},
-    onNavigateToGlassesDisplayPreview: () -> Unit = {}
+    onNavigateToGlassesDisplayPreview: () -> Unit = {},
+    onNavigateToNotificationBridge: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val openClawState by remember { OpenClawNodeService.getInstance(context) }.connectionState.collectAsState()
@@ -421,7 +422,7 @@ fun SettingsScreen(
                 )
             }
 
-            // Integrations Section (Phase B: OpenClaw)
+            // Integrations Section
             SettingsSection(title = stringResource(R.string.settings_integrations)) {
                 SettingsItem(
                     icon = Icons.Default.Link,
@@ -429,6 +430,13 @@ fun SettingsScreen(
                     subtitle = openClawStatusText(openClawState),
                     subtitleColor = openClawStatusColor(openClawState),
                     onClick = onNavigateToOpenClawSettings
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = AppSpacing.medium))
+                SettingsItem(
+                    icon = Icons.Default.Notifications,
+                    title = stringResource(R.string.bridge_title),
+                    subtitle = stringResource(R.string.bridge_subtitle),
+                    onClick = onNavigateToNotificationBridge
                 )
             }
 

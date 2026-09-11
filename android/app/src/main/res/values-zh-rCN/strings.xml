@@ -550,4 +550,46 @@
     <string name="display_preview_title">眼镜显示预览</string>
     <string name="display_preview_subtitle">在手机上预览眼镜卡片（仅调试版）</string>
     <string name="display_preview_actions_hint">预览按钮会执行真实的应用操作。</string>
+
+    <!-- Phase E Task 4: phone notification and music bridge -->
+    <string name="bridge_title">通知与音乐</string>
+    <string name="bridge_subtitle">微信消息预览与音乐控制</string>
+    <string name="bridge_access_title">Android 通知使用权</string>
+    <string name="bridge_access_explanation">两项功能默认关闭。通知使用权是独立的 Android 权限；授予权限不会自动开启任何一项功能。</string>
+    <string name="bridge_access_granted">通知使用权：已允许</string>
+    <string name="bridge_access_not_granted">通知使用权：未允许</string>
+    <string name="bridge_listener_connected">通知服务：已连接</string>
+    <string name="bridge_listener_disconnected">通知服务：未连接</string>
+    <string name="bridge_open_access_settings">打开通知使用权设置</string>
+    <string name="bridge_settings_unavailable">无法打开 Android 通知使用权设置。</string>
+    <string name="bridge_access_required">请先在 Android 设置中授予通知使用权，再使用此功能。</string>
+    <string name="bridge_listener_waiting">正在等待 Android 连接通知服务。</string>
+    <string name="bridge_features_title">选择功能</string>
+    <string name="bridge_wechat_enabled">微信消息预览</string>
+    <string name="bridge_wechat_description">仅当眼镜会话已启动且显示已就绪时，在眼镜上显示微信通知预览。</string>
+    <string name="bridge_music_enabled">音乐控制</string>
+    <string name="bridge_music_description">控制支持的音乐应用。开启后，本页面可见期间会保持眼镜会话，不使用摄像头。</string>
+    <string name="bridge_current_track">当前歌曲</string>
+    <string name="bridge_music_disabled">开启音乐控制后显示当前歌曲。</string>
+    <string name="bridge_no_track">暂无可用歌曲。请先在允许的音乐应用中开始播放。</string>
+    <string name="bridge_untitled_track">未命名歌曲</string>
+    <string name="bridge_playing">正在播放</string>
+    <string name="bridge_paused">已暂停</string>
+    <string name="bridge_previous">上一首</string>
+    <string name="bridge_play">播放</string>
+    <string name="bridge_pause">暂停</string>
+    <string name="bridge_next">下一首</string>
+    <string name="bridge_controls_hint">仅可使用当前音乐应用支持的控制按钮。</string>
+    <string name="bridge_media_apps">允许的音乐应用</string>
+    <string name="bridge_media_apps_description">默认包名对应网易云音乐和汽水音乐。可用的控制功能取决于音乐应用。</string>
+    <string name="bridge_package_names">应用包名</string>
+    <string name="bridge_packages_hint">每行一个包名，例如 com.netease.cloudmusic。列表为空时不允许任何应用。</string>
+    <string name="bridge_packages_invalid">请输入有效的包名，每行一个，例如 com.luna.music。</string>
+    <string name="bridge_latest_messages">最近的微信预览</string>
+    <string name="bridge_messages_privacy">最多保留三条预览，仅存于内存，不保存或上传。移除通知会移除其预览；关闭预览功能或通知服务断开后会清空预览。</string>
+    <string name="bridge_wechat_disabled">开启微信消息预览后，在此显示新收到的通知。</string>
+    <string name="bridge_no_messages">暂无微信消息预览。</string>
+    <string name="bridge_content_unavailable">通知内容不可用。</string>
+    <string name="bridge_access_lost">通知使用权已失效，请检查 Android 通知使用权设置。</string>
+    <string name="bridge_session_unavailable">眼镜会话不可用，请检查眼镜连接后重试。</string>
 </resources>

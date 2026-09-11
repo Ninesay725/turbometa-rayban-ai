@@ -55,6 +55,7 @@ class GlassesDisplayManager internal constructor(
         abstract val seq: Long
         data class Card(
             val card: DisplayCard, override val seq: Long, val isFallback: Boolean = false,
+            val privateContent: Boolean = card is DisplayCard.WeChat,
         ) : SendRequest()
         data class Clear(override val seq: Long) : SendRequest()
     }
@@ -66,6 +67,7 @@ class GlassesDisplayManager internal constructor(
     private val _currentCard = MutableStateFlow<DisplayCard?>(null)
     val currentCard: StateFlow<DisplayCard?> = _currentCard.asStateFlow()
     private val _lastSent = MutableStateFlow<DisplayCard?>(null)
+    private var lastSentPrivate = false
     /** The last card accepted by the attached display; clear is not a card send. */
     val lastSent: StateFlow<DisplayCard?> = _lastSent.asStateFlow()
 
@@ -99,6 +101,7 @@ class GlassesDisplayManager internal constructor(
 
     override fun show(card: DisplayCard) {
         checkMain()
+        forgetPrivateSnapshot()
         contentOwner = null
         _currentCard.value = card
         enqueue(card)
@@ -122,12 +125,14 @@ class GlassesDisplayManager internal constructor(
 
     override fun showPage(card: DisplayCard) {
         checkMain()
+        forgetPrivateSnapshot()
         _currentCard.value = card
         enqueue(card)
     }
 
     override fun showStatus() {
         checkMain()
+        forgetPrivateSnapshot()
         contentOwner = null
         _currentCard.value = null
         enqueue(statusProvider.currentStatus())
@@ -135,13 +140,19 @@ class GlassesDisplayManager internal constructor(
 
     override fun clear() {
         checkMain()
+        forgetPrivateSnapshot()
         contentOwner = null
         _currentCard.value = null
         pending.value = SendRequest.Clear(++sequence)
     }
 
-    private fun enqueue(card: DisplayCard, isFallback: Boolean = false) {
-        pending.value = SendRequest.Card(card, ++sequence, isFallback)
+    private fun enqueue(card: DisplayCard, isFallback: Boolean = false, privateContent: Boolean = card is DisplayCard.WeChat) {
+        pending.value = SendRequest.Card(card, ++sequence, isFallback, privateContent)
+    }
+
+    private fun forgetPrivateSnapshot() {
+        // Keep normal send timing/history semantics, but notification previews are ephemeral.
+        if (lastSentPrivate) { _lastSent.value = null; lastSentPrivate = false }
     }
 
     private fun startedDisplay(): GlassesDisplay? =
@@ -175,7 +186,10 @@ class GlassesDisplayManager internal constructor(
     private fun onSendResult(request: SendRequest.Card, result: DisplaySendResult) {
         when (result) {
             DisplaySendResult.Sent -> {
-                _lastSent.value = request.card
+                if (!request.privateContent || request.seq == pending.value?.seq) {
+                    _lastSent.value = request.card
+                    lastSentPrivate = request.privateContent
+                }
                 if (request.card is DisplayCard.LiveAI) lastLiveAiSentAt = clock()
             }
             is DisplaySendResult.Failed -> when (result.error) {
@@ -184,7 +198,7 @@ class GlassesDisplayManager internal constructor(
                     Log.e(TAG, "Display rendering failed; fallback=${request.isFallback}")
                     // A failing old render must never replace a newer card, menu, or clear.
                     if (!request.isFallback && request.seq == pending.value?.seq && startedDisplay() != null) {
-                        enqueue(request.card.fallbackNotice(strings), isFallback = true)
+                        enqueue(request.card.fallbackNotice(strings), isFallback = true, privateContent = request.privateContent)
                     }
                 }
                 DisplayError.DEVICE_DISCONNECTED, DisplayError.UNEXPECTED_ERROR ->

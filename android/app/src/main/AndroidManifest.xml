@@ -80,6 +80,16 @@
 
         <!-- Quick Vision Service -->
         <service
+            android:name=".services.NotificationBridgeService"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".services.QuickVisionService"
             android:exported="false"
             android:foregroundServiceType="microphone" />

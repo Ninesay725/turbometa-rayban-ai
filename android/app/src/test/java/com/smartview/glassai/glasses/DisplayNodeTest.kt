@@ -256,7 +256,7 @@ class DisplayNodeTest {
         assertEquals(card.copy(page = 4).toNode(strings), card.copy(page = 20).toNode(strings))
     }
 
-    @Test fun weChatAndMusicPlaceholdersRender() {
+    @Test fun defaultWeChatAndMusicCardsRetainTheirTextAndControls() {
         val weChat = DisplayCard.WeChat("小明", "你好").toNode(strings)
         assertHeader(weChat, DisplayIcon.ENVELOPE_OPEN, "小明")
         assertEquals(listOf(DisplayNode.Text("你好")), body(weChat))
@@ -273,12 +273,89 @@ class DisplayNodeTest {
         }
     }
 
-    @Test fun everyNodeTreeUsesOnlyColumnRowTextIconButtonButtonGroup() {
+    @Test fun wechatPagingKeepsMergedContentMetadataAndActionsWithinTheViewport() {
+        val text = List(20) { "中".repeat(13) }.joinToString("\n") + "\r\n😀 final  "
+        val card = DisplayCard.WeChat("群聊\n".repeat(15), text, 3, 1_789_142_400_000L)
+        val nodes = (0 until card.pageCount()).map { card.copy(page = it).toNode(strings) }
+        assertTrue(nodes.size > 1)
+        assertEquals(text, nodes.joinToString("") { body(it).single { it.style == NodeTextStyle.BODY }.text })
+        nodes.forEachIndexed { index, node ->
+            val metadata = body(node).first().text
+            assertTrue(metadata.matches(Regex("×3 · [0-2][0-9]:[0-5][0-9]")))
+            assertEquals(indicator("${index + 1}/${nodes.size}"), body(node).last())
+            assertTrue("Header, metadata, body, page and controls fit", modeledHeight(node) <= 600)
+            val expected = buildList {
+                if (index > 0) add(prev(card.copy(page = index - 1)))
+                if (index < nodes.lastIndex) add(next(card.copy(page = index + 1)))
+                add(done())
+            }
+            assertEquals(expected, buttons(node))
+        }
+        assertEquals(nodes.first(), card.copy(page = Int.MIN_VALUE).toNode(strings))
+        assertEquals(nodes.last(), card.copy(page = Int.MAX_VALUE).toNode(strings))
+    }
+
+    @Test fun unknownWechatTimeIsOmittedAndCountIsBoundedWithoutDroppingText() {
+        val card = DisplayCard.WeChat("Sam", "hello", count = Int.MAX_VALUE)
+        assertEquals(listOf(indicator("×3"), DisplayNode.Text("hello")), body(card.toNode(strings)))
+        assertEquals(listOf(done()), buttons(card.toNode(strings)))
+        val timeOnly = card.copy(count = -1, timestamp = 1_789_142_400_000L)
+        assertTrue(body(timeOnly.toNode(strings)).first().text.startsWith("×1 · "))
+        assertEquals(listOf(DisplayNode.Text("hello")), body(card.copy(count = 1, timestamp = -1).toNode(strings)))
+    }
+
+    @Test fun musicArtAndAppReserveTheirSpaceWithoutChangingTheThreeActions() {
+        val title = List(20) { "标题" }.joinToString("\n")
+        val artist = List(20) { "音乐人😀" }.joinToString("\n")
+        for (hasArt in listOf(false, true)) for (hasApp in listOf(false, true)) {
+            val jpeg = if (hasArt) byteArrayOf(1, 2, 3) else null // Decode validity is a boundary concern.
+            val app = if (hasApp) "播放器\n".repeat(20) else ""
+            val card = DisplayCard.Music(title, artist, true, app, jpeg)
+            val node = card.toNode(strings)
+            assertTrue("art=$hasArt app=$hasApp", modeledHeight(node) <= 600)
+            assertEquals(listOf(DisplayAction.MusicPrev, DisplayAction.MusicPlayPause, DisplayAction.MusicNext),
+                buttons(node).map { it.action })
+            val artistNode = body(node).single { it.style == NodeTextStyle.BODY }
+            val expectedMaxLines = when { hasArt && hasApp -> 1; hasArt -> 2; hasApp -> 8; else -> 9 }
+            assertTrue(conservativeDisplayLines(artistNode.text, 19) <= expectedMaxLines)
+            assertTrue(artistNode.text.endsWith("…"))
+            assertEquals(artist, card.artist)
+            assertEquals(app, card.app)
+            if (hasApp) assertTrue(conservativeDisplayLines(body(node).last().text, 25) <= 1)
+            if (hasArt) {
+                val frame = node.children.filterIsInstance<DisplayNode.Column>().single()
+                val image = frame.children.single() as DisplayNode.Image
+                assertEquals(240, image.size)
+                assertEquals(image.size, 600 - node.padding * 2 - frame.paddingStart!! - frame.paddingEnd!!)
+                assertEquals(NodeAlignment.STRETCH, frame.crossAlignment)
+                assertTrue(jpeg === image.jpeg)
+            } else assertTrue(node.children.none { it is DisplayNode.Column })
+        }
+    }
+
+    @Test fun absentOrEmptyArtYieldsTheSameUsableTextCard() {
+        val card = DisplayCard.Music("Song", "Artist", false, "Player")
+        assertEquals(card.toNode(strings), card.copy(artJpeg = byteArrayOf()).toNode(strings))
+        assertEquals(listOf(DisplayNode.Text("Artist", color = NodeTextColor.SECONDARY), indicator("Player")),
+            body(card.toNode(strings)))
+        assertEquals(3, buttons(card.toNode(strings)).size)
+    }
+
+    @Test fun imageSizeCannotExceedItsReservedMaximumOrBeNonpositive() {
+        assertEquals(240, DisplayNode.Image(byteArrayOf()).size)
+        assertEquals(120, DisplayNode.Image(byteArrayOf(), 120).size)
+        for (size in listOf(Int.MIN_VALUE, 0, 241, Int.MAX_VALUE)) {
+            assertTrue(runCatching { DisplayNode.Image(byteArrayOf(), size) }.exceptionOrNull() is IllegalArgumentException)
+        }
+    }
+
+    @Test fun everyNodeTreeUsesOnlySupportedNodes() {
         val cards = listOf(
             DisplayCard.Status("Glasses", true, true), DisplayCard.Notice("Notice", "Body"),
             DisplayCard.LiveAI(LiveAIPhase.LISTENING, "Question", "Answer", true),
             DisplayCard.QuickVision("Vision", "Result"), foodCard, DisplayCard.OpenClaw(null, "Reply", true),
             DisplayCard.WeChat("Sam", "Hello"), DisplayCard.Music("Song", "Artist", true),
+            DisplayCard.Music("Song", "Artist", true, "Player", byteArrayOf(1)),
         )
         for (card in cards) {
             val node = card.toNode(strings)
@@ -317,7 +394,7 @@ class DisplayNodeTest {
             is DisplayNode.Column -> node.children.forEach(::checkTree)
             is DisplayNode.Row -> node.children.forEach(::checkTree)
             is DisplayNode.ButtonGroup -> node.buttons.forEach(::checkTree)
-            is DisplayNode.Text, is DisplayNode.Icon, is DisplayNode.Button -> Unit
+            is DisplayNode.Text, is DisplayNode.Icon, is DisplayNode.Image, is DisplayNode.Button -> Unit
         }
     }
 
@@ -334,6 +411,7 @@ class DisplayNodeTest {
             NodeTextStyle.META -> conservativeDisplayLines(node.text, 25) * 28
         }
         is DisplayNode.Icon -> 48
+        is DisplayNode.Image -> node.size
         is DisplayNode.Button, is DisplayNode.ButtonGroup -> 88
     }
 }

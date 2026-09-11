@@ -1,5 +1,10 @@
 package com.smartview.glassai.glasses
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
 /** Metrics from the pinned DAT 0.9 TextStyle; shared with the phone preview. */
 enum class NodeTextStyle(val fontSize: Int, val lineHeight: Int) {
     HEADING(40, 48), BODY(28, 36), META(22, 28),
@@ -11,6 +16,7 @@ object DisplayLayout {
     const val PADDING = 24
     const val GAP = 12
     const val BUTTON_HEIGHT = 88 // Pinned NovaRendererProfile, including button groups.
+    const val ART_SIZE = 240
     const val HEADER_LINES = 2
     const val USER_LINES = 2
     const val CONTENT_WIDTH = VIEWPORT - PADDING * 2
@@ -20,13 +26,18 @@ object DisplayLayout {
     val metaColumns: Int get() = CONTENT_WIDTH / NodeTextStyle.META.fontSize
 
     /** Reserve the indicator even for page one, so discovering more pages cannot reduce its budget. */
-    fun bodyLines(hasUser: Boolean = false, paged: Boolean = false, buttons: Boolean = true, bodyBlocks: Int = 1): Int {
+    fun bodyLines(
+        hasUser: Boolean = false, paged: Boolean = false, buttons: Boolean = true, bodyBlocks: Int = 1,
+        metaLines: Int = 0, imageSize: Int = 0,
+    ): Int {
         val userHeight = if (hasUser) USER_LINES * NodeTextStyle.META.lineHeight else 0
         val indicatorHeight = if (paged) NodeTextStyle.META.lineHeight else 0
         val buttonHeight = if (buttons) BUTTON_HEIGHT else 0
-        val children = 1 + bodyBlocks + (if (hasUser) 1 else 0) + (if (paged) 1 else 0) + (if (buttons) 1 else 0)
+        val children = 1 + bodyBlocks + (if (hasUser) 1 else 0) + (if (paged) 1 else 0) + (if (buttons) 1 else 0) +
+            (if (metaLines > 0) 1 else 0) + (if (imageSize > 0) 1 else 0)
         return (VIEWPORT - PADDING * 2 - HEADER_LINES * NodeTextStyle.HEADING.lineHeight -
-            userHeight - indicatorHeight - buttonHeight - GAP * (children - 1)) / NodeTextStyle.BODY.lineHeight
+            userHeight - indicatorHeight - buttonHeight - metaLines * NodeTextStyle.META.lineHeight - imageSize -
+            GAP * (children - 1)) / NodeTextStyle.BODY.lineHeight
     }
 }
 enum class NodeTextColor { PRIMARY, SECONDARY }
@@ -51,6 +62,10 @@ sealed interface DisplayNode {
     ) : DisplayNode
     data class Text(val text: String, val style: NodeTextStyle = NodeTextStyle.BODY, val color: NodeTextColor = NodeTextColor.PRIMARY, val flexGrow: Float = 0f) : DisplayNode
     data class Icon(val icon: DisplayIcon, val outline: Boolean = false) : DisplayNode
+    /** A square, letterboxed art slot. JPEG decoding and validation belong to the renderer. */
+    data class Image(val jpeg: ByteArray, val size: Int = DisplayLayout.ART_SIZE) : DisplayNode {
+        init { require(size in 1..DisplayLayout.ART_SIZE) }
+    }
     data class Button(val label: String, val style: NodeButtonStyle = NodeButtonStyle.PRIMARY, val icon: DisplayIcon? = null, val action: DisplayAction) : DisplayNode
     data class ButtonGroup(val buttons: List<Button>, val alignment: NodeAlignment = NodeAlignment.CENTER) : DisplayNode
 }
@@ -146,13 +161,37 @@ fun DisplayCard.toNode(strings: DisplayStrings): DisplayNode.Column = DisplayNod
                 ))
             }
             is DisplayCard.WeChat -> {
+                val pages = card.previewPages()
+                val page = card.page.coerceIn(0, pages.lastIndex)
                 add(header(DisplayIcon.ENVELOPE_OPEN, card.sender))
-                add(boundedBody(card.preview, DisplayLayout.bodyLines()))
-                addButtons(listOf(doneButton(strings)))
+                if (card.hasMetadata) {
+                    // Numeric count and 24-hour local time need no additional translated labels.
+                    val time = if (card.timestamp > 0) DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
+                        .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(card.timestamp)) else null
+                    add(DisplayNode.Text(listOfNotNull("×${card.count.coerceIn(1, 3)}", time).joinToString(" · "),
+                        NodeTextStyle.META, NodeTextColor.SECONDARY))
+                }
+                add(DisplayNode.Text(pages[page]))
+                addPageIndicator(page, pages.size)
+                addButtons(pageButtons(page, pages.size, strings) { card.copy(page = it) } + doneButton(strings))
             }
             is DisplayCard.Music -> {
+                val art = card.artJpeg?.takeIf { it.isNotEmpty() }
+                val hasApp = card.app.isNotBlank()
                 add(header(DisplayIcon.MUSIC_NOTE, card.title))
-                add(boundedBody(card.artist, DisplayLayout.bodyLines(), NodeTextColor.SECONDARY))
+                if (art != null) {
+                    // FILL has no public pixel-size argument. This stretched, padded column limits
+                    // its square bitmap to 240 logical units inside the 552-unit content width.
+                    val inset = (DisplayLayout.CONTENT_WIDTH - DisplayLayout.ART_SIZE) / 2
+                    add(DisplayNode.Column(listOf(DisplayNode.Image(art)), paddingStart = inset, paddingEnd = inset,
+                        crossAlignment = NodeAlignment.STRETCH))
+                }
+                add(boundedBody(card.artist, DisplayLayout.bodyLines(
+                    metaLines = if (hasApp) 1 else 0, imageSize = if (art != null) DisplayLayout.ART_SIZE else 0,
+                ), NodeTextColor.SECONDARY))
+                if (hasApp) add(DisplayNode.Text(card.app.boundedDisplayText(
+                    DisplayCard.PAGE_CHARS, 1, DisplayLayout.metaColumns,
+                ), NodeTextStyle.META, NodeTextColor.SECONDARY))
                 addButtons(listOf(
                     DisplayNode.Button(strings.prev, NodeButtonStyle.OUTLINE, DisplayIcon.TRIANGLE_LEFT_VERTICAL_LINE, DisplayAction.MusicPrev),
                     DisplayNode.Button("", NodeButtonStyle.PRIMARY, if (card.isPlaying) DisplayIcon.TWO_LINES_PARALLEL else DisplayIcon.TRIANGLE_RIGHT, DisplayAction.MusicPlayPause),

@@ -35,10 +35,23 @@ class DisplayPreviewSamplesTest {
         val quickVision = cards.filterIsInstance<DisplayCard.QuickVision>().single()
         val openClaw = cards.filterIsInstance<DisplayCard.OpenClaw>().single()
         val leanEat = cards.filterIsInstance<DisplayCard.LeanEat>().single()
+        val wechat = cards.filterIsInstance<DisplayCard.WeChat>().single()
         assertTrue(quickVision.resultText.length >= 700)
         assertTrue(openClaw.replyText.length >= 400)
-        listOf(quickVision, openClaw, leanEat).forEach { assertTrue(it.pageCount() > 1) }
+        listOf(quickVision, openClaw, leanEat, wechat).forEach { assertTrue(it.pageCount() > 1) }
+        assertEquals(3, wechat.count)
+        assertTrue(wechat.timestamp > 0)
         assertEquals(3, leanEat.foods.size)
         assertEquals(2, leanEat.suggestions.size)
+    }
+
+    @Test fun musicSampleUsesLocalJpegBytesAndKeepsTheAppName() {
+        val card = DisplayPreviewSamples.all(strings).map { it.second }.filterIsInstance<DisplayCard.Music>().single()
+        assertTrue(card.app.isNotBlank())
+        val jpeg = card.artJpeg!!
+        assertEquals(0xFF.toByte(), jpeg[0])
+        assertEquals(0xD8.toByte(), jpeg[1])
+        val frame = card.toNode(strings).children.filterIsInstance<DisplayNode.Column>().single()
+        assertTrue(frame.children.single() is DisplayNode.Image)
     }
 }
