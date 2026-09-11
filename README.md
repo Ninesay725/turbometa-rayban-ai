@@ -7,13 +7,15 @@
 **🌏 全球首个支持全中文AI的全模态 RayBan Meta 助手**
 
 [![iOS](https://img.shields.io/badge/iOS-17.0%2B-blue.svg)](https://www.apple.com/ios/)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-green.svg)](https://www.android.com/)
+[![Android](https://img.shields.io/badge/Android-12%2B-green.svg)](https://www.android.com/)
 [![Swift](https://img.shields.io/badge/Swift-5.0-orange.svg)](https://swift.org)
-[![Kotlin](https://img.shields.io/badge/Kotlin-1.9-purple.svg)](https://kotlinlang.org)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-purple.svg)](https://kotlinlang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![请我喝咖啡](https://img.shields.io/badge/请我喝咖啡-☕-yellow?style=flat-square)](#-请我喝杯咖啡)
 
 **🇺🇸 [English Version / README in English](./README_EN.md)** | 简体中文
+
+Android `android-v2` 开发分支已接入 DAT0.9、OpenClaw、Display 卡片、微信通知/网易云与汽水音乐控制，以及相机中心、云端朗读和实时翻译。真实镜片、第三方应用和云端账号验收尚未完成，未发布正式版本。详见 [Android 说明](./android/README.md) 与 [本次验收记录](./docs/superpowers/reviews/phase-d/task-7-report.md)。
 
 </div>
 
@@ -33,7 +35,7 @@
 
 **语音对话、拍照识别、OpenClaw AI 助手 - 你的眼镜，连接一切！**
 
-✅ **iOS v2.0.0** | ✅ **Android v2.0.0**
+✅ **iOS v2.0.0** | 🛠️ **Android v2.0.0 开发版（待真机验收）**
 
 ☕ **喜欢这个项目？** [**请我喝杯咖啡**](#-请我喝杯咖啡) 支持开发！
 
@@ -171,7 +173,7 @@
 
 ### 📱 Android
 
-> Android 2.0.0 开发分支已包含 OpenClaw 集成（节点模式）、DAT SDK 0.9.0，以及 Meta Ray-Ban Display 文本卡片实现（Live AI、Quick Vision、LeanEat、OpenClaw）。实际镜片与按钮尚待真机验收；微信与音乐桥接仍在后续路线中。配置与验证说明见 [`android/README.md`](android/README.md)。
+> Android 2.0.0 开发分支已包含 OpenClaw、DAT SDK 0.9.0、Display 卡片、微信通知与网易云/汽水音乐控制，以及相机、朗读和实时翻译。实际镜片、按钮、第三方应用与云端账号仍待验收。配置与验证说明见 [`android/README.md`](android/README.md) 和 [当前进度](docs/ANDROID_2_PROGRESS.md)。
 
 👉 [**前往下载 APK**](https://github.com/Turbo1123/turbometa-rayban-ai/releases)
 

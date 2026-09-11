@@ -30,9 +30,10 @@ import com.smartview.glassai.viewmodels.VisionViewModel
 @Composable
 fun VisionScreen(
     viewModel: VisionViewModel = viewModel(),
-    currentFrame: Bitmap? = null,
+    @Suppress("UNUSED_PARAMETER") currentFrame: Bitmap? = null,
     onBackClick: () -> Unit,
-    onTakePhoto: () -> Unit
+    onTakePhoto: () -> Unit,
+    initialPhoto: Bitmap? = null,
 ) {
     val viewState by viewModel.viewState.collectAsState()
     val capturedImage by viewModel.capturedImage.collectAsState()
@@ -40,9 +41,17 @@ fun VisionScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val customPrompt by viewModel.customPrompt.collectAsState()
 
-    // Update captured image when frame is available
-    LaunchedEffect(currentFrame) {
-        currentFrame?.let { viewModel.setCapturedImage(it) }
+    DisposableEffect(viewModel) {
+        onDispose { viewModel.reset() }
+    }
+
+    // Fresh captures arrive from the parent's route owner, never from the changing live frame.
+    // currentFrame remains in the signature for source compatibility.
+    LaunchedEffect(viewModel, initialPhoto) {
+        initialPhoto?.let {
+            viewModel.reset()
+            viewModel.setCapturedImage(it)
+        }
     }
 
     Scaffold(

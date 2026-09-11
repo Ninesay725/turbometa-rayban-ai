@@ -25,6 +25,7 @@ class FakeGlassesCamera : GlassesCamera {
     var stopCalls = 0
     var startError: StreamError? = null
     var captureResult: PhotoCaptureResult = PhotoCaptureResult.Failure(CaptureError.NotStreaming)
+    var onCapture: (suspend () -> PhotoCaptureResult)? = null
 
     override val streamState: StateFlow<DatStreamState> = stateFlow
     override val videoFrames: Flow<VideoFrame> = frames
@@ -36,7 +37,7 @@ class FakeGlassesCamera : GlassesCamera {
         return startError
     }
 
-    override suspend fun capturePhoto(): PhotoCaptureResult = captureResult
+    override suspend fun capturePhoto(): PhotoCaptureResult = onCapture?.invoke() ?: captureResult
 
     override fun stop() {
         stopCalls++

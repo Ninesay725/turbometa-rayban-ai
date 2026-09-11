@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_title">相机</string>
+    <string name="camera_preview_title">照片预览</string>
+    <string name="camera_live_preview">眼镜相机实时预览</string>
+    <string name="camera_auto_stop">自动停止相机</string>
+    <string name="camera_remaining">将在 %1$d:%2$02d 后停止</string>
+    <string name="camera_starting">正在检查权限并启动相机…</string>
+    <string name="camera_stream_active">相机已启动。</string>
+    <string name="camera_stream_stopped">相机已停止。</string>
+    <string name="camera_start_denied">无法启动相机。请检查蓝牙和相机权限后重试。</string>
+    <string name="camera_stream_failed">相机取流已结束或未能启动，请在眼镜就绪后重试。</string>
+    <string name="camera_timer_expired">计时已结束，相机已停止。轻触“重新启动相机”再次启动。</string>
+    <string name="camera_restart">重新启动相机</string>
+    <string name="camera_capturing">正在拍照…</string>
+    <string name="camera_capture_timeout">未收到新照片，相机已停止。请重新启动后再试。</string>
+    <string name="camera_preview_privacy">相机已停止。照片仅保留在内存中，不会自动保存或上传。</string>
+    <string name="camera_nutrition">营养分析</string>
+    <string name="camera_share_preparing">正在准备照片…</string>
+    <string name="camera_share_failed">无法分享此照片。</string>
+</resources>

@@ -215,6 +215,7 @@ class LeanEatViewModel internal constructor(
         super.onCleared()
         cancelAnalysis()
         sink.showStatus()
-        _capturedImage.value?.recycle()
+        // Camera preview / navigation may still hold this same bitmap. Let GC reclaim it.
+        _capturedImage.value = null
     }
 }

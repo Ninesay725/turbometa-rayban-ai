@@ -2,6 +2,7 @@ package com.smartview.glassai
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
@@ -88,12 +89,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun attachBaseContext(newBase: Context) {
+        // Custom locale storage must be restored before AppCompat wraps the Activity context.
+        // Restoring in onCreate is too late for cold starts on Android 12 and earlier.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) LanguageManager.init(newBase)
+        super.attachBaseContext(newBase)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         // Initialize Language Manager (for app language switching)
-        LanguageManager.init(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) LanguageManager.init(this)
 
         // Check and request permissions
         checkAndRequestPermissions()

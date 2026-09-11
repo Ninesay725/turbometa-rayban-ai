@@ -1,5 +1,15 @@
 # Changelog
 
+## Android 2.0.0 development — camera, speech and translation
+
+- RTMP authentication failures now release the attempt and allow retry; retired callbacks are fenced under the stop lock, with 13 production callback regressions. Quick Vision no longer logs prompts, analysis text or provider error bodies.
+
+- Camera hub with timed streams, fresh cancellable photo capture, RAM preview, explicit sharing and analysis/nutrition handoff. Page-specific camera ownership fences delayed permission and capture callbacks.
+- Shared Quick Vision speech through regional `qwen3-tts-flash` HTTP SSE, bounded PCM16 playback and system TTS fallback. Cancelling speech never starts fallback playback.
+- Foreground-only `qwen3-livetranslate-flash-realtime`: validated language/voice settings, explicit microphone permission, bounded configuration wait, optional camera enhancement, and RAM-only history.
+- Restore custom app locales before Activity context attachment on Android 12 and earlier. Current-build emulator verification is recorded separately from historical reports.
+- Physical Display, real WeChat/music apps, actual cloud entitlement and microphone routing remain subject to the hardware checklists; the known DAT rapid-session-restart stress case remains unresolved and excluded explicitly.
+
 ## Android 2.0.0 development — notifications and music
 
 - Added opt-in WeChat notification previews and public MediaSession controls for configurable NetEase/Qishui packages.

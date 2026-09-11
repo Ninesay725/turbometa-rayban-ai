@@ -5,6 +5,15 @@ import android.app.Application
 import com.meta.wearable.dat.camera.types.StreamError
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoQuality
+import com.meta.wearable.dat.camera.types.PhotoData
+import com.meta.wearable.dat.core.types.PermissionStatus
+import com.smartview.glassai.glasses.CameraPermissionCheck
+import com.smartview.glassai.glasses.PhotoCaptureResult
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceSessionError
 import com.meta.wearable.dat.core.types.DeviceType
@@ -87,6 +96,84 @@ class WearablesViewModelTest {
         videoQuality = { VideoQuality.MEDIUM },
         frameDispatcher = dispatcher,
     ).also { it.startMonitoring() }
+
+    @Test
+    fun retiredScreenCleanupCannotStopItsSuccessor() = runTest(dispatcher) {
+        observer.device.value = rayban
+        val vm = newViewModel()
+        val first = Any()
+        val second = Any()
+        assertTrue(vm.startStream(first) { PermissionStatus.Granted })
+        factory.last.emitStarted()
+        factory.last.cameras.single().stateFlow.value = DatStreamState.STREAMING
+        assertTrue(vm.startStream(second) { PermissionStatus.Granted })
+        factory.last.emitStarted()
+        val successor = factory.last.cameras.single()
+        successor.stateFlow.value = DatStreamState.STREAMING
+        vm.stopStream(first)
+        vm.stopStream() // a retiring legacy screen also cannot stop an owned stream
+        assertEquals(0, successor.stopCalls)
+        assertEquals(WearablesViewModel.StreamState.Streaming, vm.streamState.value)
+        vm.stopStream(second)
+        assertEquals(1, successor.stopCalls)
+    }
+
+    @Test
+    fun latePermissionAfterLeavingDoesNotStartCamera() = runTest(dispatcher) {
+        observer.device.value = rayban
+        registration.permission = CameraPermissionCheck.Denied
+        val vm = newViewModel()
+        val owner = Any()
+        val permission = CompletableDeferred<PermissionStatus>()
+        val start = async { vm.startStream(owner) { permission.await() } }
+        vm.stopStream(owner)
+        permission.complete(PermissionStatus.Granted)
+        assertFalse(start.await())
+        assertEquals(0, factory.createCalls)
+        assertEquals(0, manager.ownerCount)
+    }
+
+    @Test
+    fun deniedPermissionLeavesNoCameraClaimAndCanRetry() = runTest(dispatcher) {
+        observer.device.value = rayban
+        registration.permission = CameraPermissionCheck.Denied
+        val vm = newViewModel()
+        val owner = Any()
+        assertFalse(vm.startStream(owner) { PermissionStatus.Denied })
+        assertEquals(0, manager.ownerCount)
+        assertTrue(vm.startStream(owner) { PermissionStatus.Granted })
+        vm.stopStream(owner)
+    }
+
+    @Test
+    fun retiredCaptureCannotPublishIntoSuccessor() = runTest(dispatcher) {
+        observer.device.value = rayban
+        val vm = newViewModel()
+        val first = Any()
+        val second = Any()
+        vm.startStream(first) { PermissionStatus.Granted }
+        factory.last.emitStarted()
+        val camera = factory.last.cameras.single()
+        camera.stateFlow.value = DatStreamState.STREAMING
+        val releaseCapture = CompletableDeferred<Unit>()
+        camera.onCapture = {
+            // Models a native completion already in flight when the caller cancels.
+            withContext(NonCancellable) { releaseCapture.await() }
+            PhotoCaptureResult.Success(PhotoData.HEIC(ByteBuffer.wrap(byteArrayOf(1))))
+        }
+        val photo = async { vm.capturePhoto(first) }
+        vm.stopStream(first)
+        vm.startStream(second) { PermissionStatus.Granted }
+        factory.last.emitStarted()
+        val successor = factory.last.cameras.single()
+        successor.stateFlow.value = DatStreamState.STREAMING
+        releaseCapture.complete(Unit)
+        photo.join()
+        assertTrue(photo.isCancelled)
+        assertNull(vm.capturedPhoto.value)
+        assertEquals(0, successor.stopCalls)
+        vm.stopStream(second)
+    }
 
     @Test
     fun streamingMapsToStreamingAndUpgradesConnection() {

@@ -111,8 +111,9 @@ class VisionAPIService(
             val responseBody = response.body?.string()
 
             if (!response.isSuccessful) {
-                Log.e(TAG, "API Error: ${response.code} - $responseBody")
-                return@withContext Result.failure(VisionAPIError.APIError("API Error: ${response.code} - $responseBody"))
+                // Provider error bodies may echo prompts or image/request data.
+                Log.e(TAG, "Vision API HTTP error: ${response.code}")
+                return@withContext Result.failure(VisionAPIError.APIError("Vision API HTTP error: ${response.code}"))
             }
 
             if (responseBody.isNullOrEmpty()) {
@@ -127,7 +128,7 @@ class VisionAPIService(
             Log.d(TAG, "Analysis successful")
             Result.success(result)
         } catch (e: Exception) {
-            Log.e(TAG, "Error analyzing image: ${e.message}")
+            Log.e(TAG, "Image analysis failed: ${e.javaClass.simpleName}")
             Result.failure(e)
         }
     }
@@ -142,7 +143,6 @@ class VisionAPIService(
             val currentMode = modeManager.currentMode.value
             val modePrompt = modeManager.getPrompt()
             Log.d(TAG, "QuickVision using mode: ${currentMode.id}, prompt length: ${modePrompt.length}")
-            Log.d(TAG, "QuickVision prompt: ${modePrompt.take(100)}...")
             modePrompt
         } ?: getQuickVisionPrompt(language)
 

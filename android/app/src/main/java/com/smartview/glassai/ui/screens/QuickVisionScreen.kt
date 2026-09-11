@@ -1,8 +1,6 @@
 package com.smartview.glassai.ui.screens
 
 import android.graphics.Bitmap
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -32,12 +30,14 @@ import com.smartview.glassai.data.QuickVisionStorage
 import com.smartview.glassai.managers.APIProviderManager
 import com.smartview.glassai.managers.QuickVisionModeManager
 import com.smartview.glassai.services.VisionAPIService
+import com.smartview.glassai.services.TTSService
 import com.smartview.glassai.ui.theme.*
 import com.smartview.glassai.utils.APIKeyManager
 import com.smartview.glassai.viewmodels.WearablesViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Locale
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 
 private const val TAG = "QuickVisionScreen"
 
@@ -76,8 +76,9 @@ fun QuickVisionScreen(
     var photoForAnalysis by remember { mutableStateOf<Bitmap?>(null) }
 
     // TTS
-    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
-    var isTtsReady by remember { mutableStateOf(false) }
+    val speech = remember(context) { TTSService(context) }
+    var speechJob by remember { mutableStateOf<Job?>(null) }
+    var speechGeneration by remember { mutableLongStateOf(0L) }
     var isSpeaking by remember { mutableStateOf(false) }
 
     // Services
@@ -99,52 +100,32 @@ fun QuickVisionScreen(
     val stopSpeakingText = stringResource(R.string.liveai_stop)
     val jarvisTipText = stringResource(R.string.picovoice_description)
 
-    // Initialize TTS
-    DisposableEffect(Unit) {
-        val textToSpeech = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                val locale = when (outputLanguage) {
-                    "zh-CN" -> Locale.CHINESE
-                    "en-US" -> Locale.US
-                    "ja-JP" -> Locale.JAPANESE
-                    "ko-KR" -> Locale.KOREAN
-                    else -> Locale.US
-                }
-                tts?.setLanguage(locale)
-                tts?.setSpeechRate(1.1f)
-                isTtsReady = true
-                Log.d(TAG, "TTS initialized with locale: $locale")
-            }
-        }
-        tts = textToSpeech
-
+    DisposableEffect(speech) {
         onDispose {
-            textToSpeech.stop()
-            textToSpeech.shutdown()
+            speechJob?.cancel()
+            speech.close()
         }
     }
 
-    // Speak function
-    fun speak(text: String) {
-        if (!isTtsReady || text.isBlank()) return
-
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                isSpeaking = true
+    fun speak(text: String, isResult: Boolean = false) {
+        val generation = ++speechGeneration
+        speechJob?.cancel()
+        isSpeaking = true
+        speechJob = scope.launch {
+            try {
+                speech.speak(text, if (isResult) outputLanguage else
+                    context.resources.configuration.locales[0].toLanguageTag())
+            } finally {
+                if (speechGeneration == generation) isSpeaking = false
             }
-            override fun onDone(utteranceId: String?) {
-                isSpeaking = false
-            }
-            override fun onError(utteranceId: String?) {
-                isSpeaking = false
-            }
-        })
-
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "quick_vision_${System.currentTimeMillis()}")
+        }
     }
 
     fun stopSpeaking() {
-        tts?.stop()
+        speechGeneration++
+        speechJob?.cancel()
+        speechJob = null
+        speech.stop()
         isSpeaking = false
     }
 
@@ -239,7 +220,7 @@ fun QuickVisionScreen(
 
         result.fold(
             onSuccess = { description ->
-                Log.d(TAG, "✅ Analysis result: $description")
+                Log.d(TAG, "Analysis completed")
                 analysisResult = description
                 statusText = ""
 
@@ -247,20 +228,20 @@ fun QuickVisionScreen(
                 val prompt = modeManager.getPrompt()
                 val currentMode = modeManager.currentMode.value
                 val visionModel = providerManager.selectedModel.value
-                val saved = quickVisionStorage.saveRecord(
+                quickVisionStorage.saveRecord(
                     bitmap = photo,
                     prompt = prompt,
                     result = description,
                     mode = currentMode,
                     visionModel = visionModel
                 )
-                Log.d(TAG, "📝 Record saved: $saved")
+                Log.d(TAG, "Record saved")
 
                 // Speak result
-                speak(description)
+                speak(description, isResult = true)
             },
             onFailure = { error ->
-                Log.e(TAG, "❌ Analysis failed: ${error.message}")
+                Log.e(TAG, "Analysis failed: ${error.javaClass.simpleName}")
                 errorMessage = analysisFailedText + ": " + (error.message ?: "")
                 speak(analysisFailedText)
             }
@@ -496,7 +477,7 @@ fun QuickVisionScreen(
 
                             // Replay button
                             IconButton(
-                                onClick = { speak(analysisResult!!) }
+                                onClick = { speak(analysisResult!!, isResult = true) }
                             ) {
                                 Icon(
                                     imageVector = if (isSpeaking) Icons.Default.VolumeUp else Icons.Default.VolumeDown,

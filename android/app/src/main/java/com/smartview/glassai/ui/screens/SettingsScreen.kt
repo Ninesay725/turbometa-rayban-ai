@@ -72,7 +72,8 @@ fun SettingsScreen(
     onNavigateToMockDeviceKit: () -> Unit = {},
     onNavigateToOpenClawSettings: () -> Unit = {},
     onNavigateToGlassesDisplayPreview: () -> Unit = {},
-    onNavigateToNotificationBridge: () -> Unit = {}
+    onNavigateToNotificationBridge: () -> Unit = {},
+    onNavigateToTranslateSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val openClawState by remember { OpenClawNodeService.getInstance(context) }.connectionState.collectAsState()
@@ -327,6 +328,15 @@ fun SettingsScreen(
             }
 
             // Quick Vision / Picovoice Section
+            SettingsSection(title = stringResource(R.string.feature_translate_title)) {
+                SettingsItem(
+                    icon = Icons.Default.Translate,
+                    title = stringResource(R.string.feature_translate_title),
+                    subtitle = stringResource(R.string.feature_translate_subtitle),
+                    onClick = onNavigateToTranslateSettings
+                )
+            }
+
             SettingsSection(title = stringResource(R.string.settings_quickvision)) {
                 // Quick Vision Mode Settings
                 SettingsItem(

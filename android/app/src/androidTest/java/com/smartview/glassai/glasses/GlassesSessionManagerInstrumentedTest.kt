@@ -1,9 +1,11 @@
 package com.smartview.glassai.glasses
 
+import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
+import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,13 +18,16 @@ import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceType
+import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationState
 import com.meta.wearable.dat.mockdevice.MockDeviceKit
 import com.meta.wearable.dat.mockdevice.api.GlassesModel
 import com.meta.wearable.dat.mockdevice.api.MockGlasses
+import com.smartview.glassai.viewmodels.WearablesViewModel
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -32,6 +37,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -174,6 +181,61 @@ class GlassesSessionManagerInstrumentedTest {
             assertEquals(0, manager.ownerCount)
             withTimeout(SESSION_TIMEOUT_MS) { manager.sessionState.first { it == DeviceSessionState.STOPPED } }
             assertFalse(manager.hasSession)
+        }
+    }
+
+    /** Normal owned-VM capture through real DAT + MDK; intentionally no session restart. */
+    @Test
+    fun ownedWearablesViewModelCapturesFreshPhotoAndReleasesStream() {
+        device.services.camera.setCapturedImage(assetUri("plant.png"))
+        onMain {
+            val viewModels = ViewModelStore()
+            val owner = Any()
+            val vm = WearablesViewModel(targetContext as Application)
+            viewModels.put("owned-camera-capture", vm)
+            var settled = false
+            try {
+                awaitActiveDevice()
+                assertTrue(withTimeout(SESSION_TIMEOUT_MS) {
+                    vm.startStream(owner) { PermissionStatus.Granted }
+                })
+                withTimeout(STREAM_TIMEOUT_MS) {
+                    vm.streamState.first { it == WearablesViewModel.StreamState.Streaming }
+                }
+                // Same explicit decoder-settle accommodation used by the other MDK tests.
+                delay(STREAM_SETTLE_MS)
+                settled = true
+                val liveFrame = withTimeout(FRAME_TIMEOUT_MS) { vm.currentFrame.first { it != null } }
+                val previousPhoto = vm.capturedPhoto.value
+                val photo = withTimeout(FRAME_TIMEOUT_MS) { vm.capturePhoto(owner) }
+                assertNotNull("Owned capture must return a newly decoded DAT photo", photo)
+                assertNotSame(previousPhoto, photo)
+                assertNotSame("Capture must not return the live preview frame", liveFrame, photo)
+                assertTrue(photo!!.width > 0 && photo.height > 0)
+                assertFalse(photo.isRecycled)
+
+                vm.stopStream(owner)
+                assertEquals(WearablesViewModel.StreamState.Stopped, vm.streamState.value)
+                assertNull(manager.currentCameraOwner)
+                assertFalse(manager.hasCameraClaim)
+                assertEquals(0, manager.ownerCount)
+                withTimeout(SESSION_TIMEOUT_MS) {
+                    manager.sessionState.first { it == DeviceSessionState.STOPPED }
+                }
+                assertFalse(manager.hasSession)
+            } finally {
+                withContext(NonCancellable) {
+                    try {
+                        if (!settled && vm.streamState.value != WearablesViewModel.StreamState.Stopped) {
+                            delay(STREAM_SETTLE_MS)
+                        }
+                        vm.stopStream(owner)
+                    } finally {
+                        // Also cancels the Activity-style VM's registration/device/error collectors.
+                        viewModels.clear()
+                    }
+                }
+            }
         }
     }
 

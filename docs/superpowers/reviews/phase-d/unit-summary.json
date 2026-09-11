@@ -1,0 +1,20 @@
+[
+  {
+    "variant": "Debug",
+    "counts": {
+      "skipped": 0,
+      "errors": 0,
+      "failures": 0,
+      "tests": 509
+    }
+  },
+  {
+    "variant": "Release",
+    "counts": {
+      "skipped": 0,
+      "errors": 0,
+      "failures": 0,
+      "tests": 497
+    }
+  }
+]

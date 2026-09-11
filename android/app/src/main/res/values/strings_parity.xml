@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_camera_title">Camera</string>
+    <string name="feature_camera_subtitle">Capture, share and analyze photos</string>
+</resources>

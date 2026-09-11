@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * 管理 HFP (Hands-Free Profile) 蓝牙麦克风连接
  * 用于 Ray-Ban Meta 眼镜的远程语音输入
  */
-class BluetoothAudioManager(private val context: Context) {
+class BluetoothAudioManager(private val context: Context, ownedScoOnly: Boolean = false) {
 
     companion object {
         private const val TAG = "BluetoothAudioManager"
@@ -45,14 +45,14 @@ class BluetoothAudioManager(private val context: Context) {
     private var isBluetoothScoOn = false
 
     /**
-     * True between [startBluetoothSco] and [stopBluetoothSco], regardless of whether the SCO link
+     * Tracks requests between [startBluetoothSco] and [stopBluetoothSco], regardless of whether the SCO link
      * ever came up. [isBluetoothScoOn] is only set by the SCO_AUDIO_STATE_CONNECTED broadcast, so
      * an arm that never connects (SCO_AUDIO_STATE_ERROR, a headset without HFP audio, or the user
      * leaving inside the connect window) used to make stopBluetoothSco() return early and leave the
      * phone in MODE_IN_COMMUNICATION: media stayed muted and the volume rocker kept controlling
      * call volume (final review I4).
      */
-    private var scoRequested = false
+    private val scoOwnership = ScoRequestOwnership(ownedScoOnly)
 
     private val _currentAudioSource = MutableStateFlow(AudioSource.PHONE_MIC)
     val currentAudioSource: StateFlow<AudioSource> = _currentAudioSource.asStateFlow()
@@ -74,6 +74,7 @@ class BluetoothAudioManager(private val context: Context) {
             Log.d(TAG, "SCO 状态变化: $state")
             when (state) {
                 AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
+                    if (!scoOwnership.acceptsConnected()) return
                     Log.d(TAG, "✅ SCO 已连接")
                     isBluetoothScoOn = true
                     _isBluetoothScoConnected.value = true
@@ -95,6 +96,7 @@ class BluetoothAudioManager(private val context: Context) {
                 AudioManager.SCO_AUDIO_STATE_ERROR -> {
                     Log.e(TAG, "❌ SCO 错误")
                     isBluetoothScoOn = false
+                    _isBluetoothScoConnected.value = false
                 }
             }
         }
@@ -114,6 +116,8 @@ class BluetoothAudioManager(private val context: Context) {
             if (profile == BluetoothProfile.HEADSET) {
                 bluetoothHeadset = null
                 _isBluetoothAvailable.value = false
+                _isBluetoothScoConnected.value = false
+                isBluetoothScoOn = false
                 Log.d(TAG, "Headset Profile 已断开")
             }
         }
@@ -211,7 +215,7 @@ class BluetoothAudioManager(private val context: Context) {
         try {
             // Set before the mode change: everything below must be undone by stopBluetoothSco(),
             // including a failure partway through.
-            scoRequested = true
+            scoOwnership.request()
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.startBluetoothSco()
             audioManager.isBluetoothScoOn = true
@@ -227,7 +231,7 @@ class BluetoothAudioManager(private val context: Context) {
     fun stopBluetoothSco() {
         // Runs whenever SCO was *requested*, not only when the link actually came up — otherwise a
         // failed arm leaves MODE_IN_COMMUNICATION behind forever (final review I4).
-        if (!scoRequested && !isBluetoothScoOn) {
+        if (!scoOwnership.shouldStop(isBluetoothScoOn)) {
             Log.d(TAG, "蓝牙 SCO 未开启")
             return
         }
@@ -240,8 +244,9 @@ class BluetoothAudioManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "停止蓝牙 SCO 失败: ${e.message}")
         } finally {
-            scoRequested = false
+            scoOwnership.clear()
             isBluetoothScoOn = false
+            _isBluetoothScoConnected.value = false
         }
     }
 
@@ -259,4 +264,13 @@ class BluetoothAudioManager(private val context: Context) {
             Log.e(TAG, "清理失败: ${e.message}")
         }
     }
+}
+
+/** Translation opts in; foreign CONNECTED broadcasts never grant it cleanup ownership. */
+internal class ScoRequestOwnership(private val ownedOnly: Boolean) {
+    private var requested = false
+    fun request() { requested = true }
+    fun acceptsConnected(): Boolean = requested || !ownedOnly
+    fun shouldStop(connected: Boolean): Boolean = requested || (!ownedOnly && connected)
+    fun clear() { requested = false }
 }

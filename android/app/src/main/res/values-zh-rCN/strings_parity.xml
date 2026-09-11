@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_camera_title">相机</string>
+    <string name="feature_camera_subtitle">拍照、分享、识图与营养分析</string>
+</resources>

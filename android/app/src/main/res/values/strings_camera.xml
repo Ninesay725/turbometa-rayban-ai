@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_title">Camera</string>
+    <string name="camera_preview_title">Photo preview</string>
+    <string name="camera_live_preview">Live glasses camera preview</string>
+    <string name="camera_auto_stop">Stop the camera after</string>
+    <string name="camera_remaining">Stops in %1$d:%2$02d</string>
+    <string name="camera_starting">Checking permissions and starting the camera…</string>
+    <string name="camera_stream_active">Camera is active.</string>
+    <string name="camera_stream_stopped">Camera is stopped.</string>
+    <string name="camera_start_denied">The camera could not start. Check Bluetooth and camera permissions, then retry.</string>
+    <string name="camera_stream_failed">The camera stream ended or could not start. Retry when your glasses are ready.</string>
+    <string name="camera_timer_expired">The timer stopped the camera. Tap Restart camera to start again.</string>
+    <string name="camera_restart">Restart camera</string>
+    <string name="camera_capturing">Capturing…</string>
+    <string name="camera_capture_timeout">No new photo was received. The camera has stopped; restart it to try again.</string>
+    <string name="camera_preview_privacy">The camera is stopped. This photo stays in memory and is not automatically saved or uploaded.</string>
+    <string name="camera_nutrition">Nutrition analysis</string>
+    <string name="camera_share_preparing">Preparing photo…</string>
+    <string name="camera_share_failed">Unable to share this photo.</string>
+</resources>

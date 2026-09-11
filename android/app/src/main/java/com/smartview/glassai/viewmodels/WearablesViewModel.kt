@@ -2,12 +2,16 @@ package com.smartview.glassai.viewmodels
 
 import android.app.Activity
 import android.app.Application
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.annotation.StringRes
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamState as DatStreamState
 import com.meta.wearable.dat.camera.types.VideoFrame
 import com.meta.wearable.dat.camera.types.VideoQuality
@@ -34,6 +38,9 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -70,6 +77,8 @@ class WearablesViewModel internal constructor(
     private val strings: (Int) -> String,
     private val videoQuality: () -> VideoQuality,
     private val frameDispatcher: CoroutineDispatcher,
+    private val bluetoothGranted: () -> Boolean = { true },
+    private val decodePhoto: (PhotoData) -> Bitmap? = FrameConversions::decodePhoto,
 ) : AndroidViewModel(application) {
 
     constructor(application: Application) : this(
@@ -80,6 +89,8 @@ class WearablesViewModel internal constructor(
         videoQuality = { videoQualityFromSetting(APIKeyManager.getInstance(application).getVideoQuality()) },
         // Single-threaded worker for frame decoding (never the main thread), like the 0.9.0 sample
         frameDispatcher = Dispatchers.Default.limitedParallelism(1),
+        bluetoothGranted = { ContextCompat.checkSelfPermission(application,
+            Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED },
     )
 
     companion object {
@@ -173,6 +184,9 @@ class WearablesViewModel internal constructor(
         get() = sessionManager.isDisplayAvailable
 
     // Borrowed camera (null when not streaming)
+    private var streamOwner: Any? = null
+    private var streamGeneration = 0L
+    private var photoJob: Job? = null
     private var camera: GlassesCamera? = null
 
     // Drop frames while the previous one is still being converted (spec §5.8)
@@ -303,7 +317,7 @@ class WearablesViewModel internal constructor(
      */
     fun disconnect(activity: Activity) {
         viewModelScope.launch {
-            stopStream()
+            stopStreamInternal()
             sessionManager.stopSession()
             startUnregistration(activity)
             _connectionState.value = ConnectionState.Disconnected
@@ -354,12 +368,80 @@ class WearablesViewModel internal constructor(
     suspend fun checkCameraPermission(): Boolean =
         registration.checkCameraPermission() == CameraPermissionCheck.Granted
 
+    /** Main-thread screen lease. A retired permission dialog cannot acquire a successor's camera. */
+    suspend fun startStream(
+        owner: Any,
+        onRequestWearablesPermission: suspend (Permission) -> PermissionStatus,
+    ): Boolean {
+        stopStreamInternal()
+        streamOwner = owner
+        val generation = streamGeneration
+        var started = false
+        try {
+            if (!bluetoothGranted()) {
+                setError(str(R.string.permission_all_required))
+                return false
+            }
+            val permission = registration.checkCameraPermission()
+            currentCoroutineContext().ensureActive()
+            if (streamOwner !== owner || generation != streamGeneration) return false
+            val granted = when (permission) {
+                CameraPermissionCheck.Granted -> true
+                CameraPermissionCheck.Denied ->
+                    onRequestWearablesPermission(Permission.CAMERA) == PermissionStatus.Granted
+                is CameraPermissionCheck.Failed -> {
+                    if (streamOwner === owner && generation == streamGeneration) {
+                        setError(str(R.string.glasses_permission_check_failed).format(permission.description))
+                    }
+                    return false
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            if (streamOwner !== owner || streamGeneration != generation) return false
+            if (!granted) {
+                setError(str(R.string.camera_permission_denied))
+                return false
+            }
+            startStreamInternal()
+            started = true
+            return true
+        } finally {
+            if (!started && streamOwner === owner && streamGeneration == generation) stopStreamInternal()
+        }
+    }
+
+    fun stopStream(owner: Any) {
+        if (streamOwner === owner) stopStreamInternal()
+    }
+
+    /** Main-thread read lease for visual uploads; recheck after off-thread image encoding. */
+    fun streamLease(owner: Any): Long? = streamGeneration.takeIf { streamOwner === owner }
+
+    fun ownsStream(owner: Any, lease: Long): Boolean =
+        streamOwner === owner && streamGeneration == lease
+
+    fun currentFrame(owner: Any, lease: Long): Bitmap? =
+        _currentFrame.value.takeIf { ownsStream(owner, lease) && _streamState.value == StreamState.Streaming }
+
+    /** Fresh result, scoped to the caller and this screen's current camera generation. */
+    suspend fun capturePhoto(owner: Any): Bitmap? {
+        if (streamOwner !== owner) return null
+        return captureCurrentPhoto(streamGeneration)
+    }
+
     /**
      * Start streaming from the wearable device camera through the shared session:
      * acquire -> ensureSessionStarted (waits for a previous session's STOPPED, creates, waits STARTED)
      * -> addCamera -> subscribe -> stream.start().
      */
     fun startStream() {
+        // Legacy screens retain their API; their delayed cleanup cannot stop an owned screen.
+        streamOwner = null
+        streamGeneration++
+        startStreamInternal()
+    }
+
+    private fun startStreamInternal() {
         Log.d(TAG, "startStream START")
 
         cancelStreamJobs()
@@ -470,7 +552,7 @@ class WearablesViewModel internal constructor(
                         if (hasBeenActive) {
                             hasBeenActive = false
                             Log.d(TAG, "Stream terminated, calling stopStream()")
-                            stopStream()
+                            stopStreamInternal()
                         }
                     }
                 }
@@ -489,7 +571,7 @@ class WearablesViewModel internal constructor(
             Log.e(TAG, "stream.start failed: ${startError.description}")
             val message = str(GlassesErrorMessages.resId(startError))
             setError(message)
-            stopStream()
+            stopStreamInternal()
             _streamState.value = StreamState.Error(message)
         }
     }
@@ -498,6 +580,12 @@ class WearablesViewModel internal constructor(
      * Stop streaming and give the camera + session claim back to the manager.
      */
     fun stopStream() {
+        if (streamOwner == null) stopStreamInternal()
+    }
+
+    private fun stopStreamInternal() {
+        streamOwner = null
+        streamGeneration++
         Log.d(TAG, "stopStream START")
 
         cancelStreamJobs()
@@ -507,6 +595,7 @@ class WearablesViewModel internal constructor(
 
         // Clear frame (let GC handle bitmap)
         _currentFrame.value = null
+        _capturedPhoto.value = null
         _streamState.value = StreamState.Stopped
 
         // Downgrade connection state
@@ -520,6 +609,8 @@ class WearablesViewModel internal constructor(
     }
 
     private fun cancelStreamJobs() {
+        photoJob?.cancel()
+        photoJob = null
         startJob?.cancel()
         startJob = null
         videoJob?.cancel()
@@ -538,32 +629,42 @@ class WearablesViewModel internal constructor(
      * Returns the previously captured photo synchronously; the new one lands in [capturedPhoto].
      */
     fun takePhoto(): Bitmap? {
-        val activeCamera = camera
-        if (activeCamera == null || _streamState.value != StreamState.Streaming) {
-            Log.w(TAG, "Cannot take photo: not streaming")
-            return null
-        }
+        val generation = streamGeneration
+        viewModelScope.launch { captureCurrentPhoto(generation) }
+        return _capturedPhoto.value
+    }
 
-        viewModelScope.launch {
-            Log.d(TAG, "Capturing photo...")
+    private suspend fun captureCurrentPhoto(generation: Long): Bitmap? = coroutineScope {
+        val activeCamera = camera ?: return@coroutineScope null
+        if (generation != streamGeneration || _streamState.value != StreamState.Streaming || photoJob?.isActive == true) {
+            return@coroutineScope null
+        }
+        val job = currentCoroutineContext()[Job]
+        photoJob = job
+        try {
             when (val result = activeCamera.capturePhoto()) {
                 is PhotoCaptureResult.Success -> {
-                    val bitmap = withContext(frameDispatcher) { FrameConversions.decodePhoto(result.photo) }
+                    val bitmap = withContext(frameDispatcher) { decodePhoto(result.photo) }
+                    currentCoroutineContext().ensureActive()
+                    if (generation != streamGeneration || camera !== activeCamera) return@coroutineScope null
                     if (bitmap == null) {
                         Log.e(TAG, "Photo decode failed")
                         setError(str(R.string.photo_capture_failed))
                     } else {
-                        Log.d(TAG, "Photo captured: ${bitmap.width}x${bitmap.height}")
                         _capturedPhoto.value = bitmap
                     }
+                    bitmap
                 }
                 is PhotoCaptureResult.Failure -> {
-                    Log.e(TAG, "Photo capture failed: ${result.error.description}")
+                    currentCoroutineContext().ensureActive()
+                    if (generation != streamGeneration || camera !== activeCamera) return@coroutineScope null
                     setError(str(GlassesErrorMessages.resId(result.error)))
+                    null
                 }
             }
+        } finally {
+            if (photoJob === job) photoJob = null
         }
-        return _capturedPhoto.value
     }
 
     /**
@@ -607,7 +708,7 @@ class WearablesViewModel internal constructor(
         Log.d(TAG, "onCleared START - cleaning up all resources")
         super.onCleared()
 
-        stopStream()
+        stopStreamInternal()
 
         deviceSelectorJob?.cancel()
         deviceSelectorJob = null

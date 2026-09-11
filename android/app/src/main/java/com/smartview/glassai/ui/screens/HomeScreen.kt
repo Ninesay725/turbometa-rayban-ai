@@ -56,7 +56,8 @@ fun HomeScreen(
     onNavigateToLiveStream: () -> Unit = {},
     onNavigateToRTMPStream: () -> Unit = {},
     onNavigateToOpenClaw: () -> Unit = {},
-    onNavigateToNotificationBridge: () -> Unit = {}
+    onNavigateToNotificationBridge: () -> Unit = {},
+    onNavigateToTranslate: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -401,8 +402,8 @@ fun HomeScreen(
 
                 // LiveStream (wide card)
                 FeatureCardWide(
-                    title = stringResource(R.string.feature_livestream_title),
-                    subtitle = stringResource(R.string.feature_livestream_subtitle),
+                    title = stringResource(R.string.feature_camera_title),
+                    subtitle = stringResource(R.string.feature_camera_subtitle),
                     icon = Icons.Default.Videocam,
                     gradientColors = listOf(LiveStreamColor, LiveStreamColor.copy(alpha = 0.7f)),
                     isLoading = isCheckingPermission,
@@ -412,9 +413,17 @@ fun HomeScreen(
                             showDeviceNotConnectedDialog = true
                             return@FeatureCardWide
                         }
-                        // Check camera permission and navigate
-                        checkCameraPermissionAndNavigate { onNavigateToLiveStream() }
+                        // The visible camera screen owns the cancellable DAT permission request.
+                        onNavigateToLiveStream()
                     }
+                )
+
+                FeatureCardWide(
+                    title = stringResource(R.string.feature_translate_title),
+                    subtitle = stringResource(R.string.feature_translate_subtitle),
+                    icon = Icons.Default.Translate,
+                    gradientColors = listOf(Primary, Secondary),
+                    onClick = onNavigateToTranslate
                 )
 
                 // RTMP Streaming (wide card) - Experimental

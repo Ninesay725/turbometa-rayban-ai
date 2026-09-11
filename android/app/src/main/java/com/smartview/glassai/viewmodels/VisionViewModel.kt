@@ -11,9 +11,14 @@ import androidx.lifecycle.viewModelScope
 import com.smartview.glassai.managers.APIProviderManager
 import com.smartview.glassai.services.VisionAPIService
 import com.smartview.glassai.utils.APIKeyManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 
@@ -22,6 +27,7 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     private val apiKeyManager = APIKeyManager.getInstance(application)
     private val providerManager = APIProviderManager.getInstance(application)
     private var visionService: VisionAPIService? = null
+    private var analysisJob: Job? = null
 
     // State
     sealed class ViewState {
@@ -100,12 +106,14 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
 
         val analysisPrompt = prompt ?: _customPrompt.value.ifBlank { DEFAULT_PROMPTS[0] }
 
-        viewModelScope.launch {
+        cancelAnalysis()
+        analysisJob = viewModelScope.launch {
             _viewState.value = ViewState.Analyzing
             _isAnalyzing.value = true
 
             try {
                 val result = visionService!!.analyzeImage(image, analysisPrompt)
+                currentCoroutineContext().ensureActive()
 
                 result.fold(
                     onSuccess = { description ->
@@ -117,21 +125,20 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
                         _viewState.value = ViewState.Error(error.message ?: "Analysis failed")
                     }
                 )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
                 _errorMessage.value = e.message
                 _viewState.value = ViewState.Error(e.message ?: "Analysis failed")
             } finally {
-                _isAnalyzing.value = false
+                if (currentCoroutineContext().isActive) _isAnalyzing.value = false
             }
         }
     }
 
     fun retakePhoto() {
-        _capturedImage.value = null
-        _analysisResult.value = null
-        _viewState.value = ViewState.Idle
-        _errorMessage.value = null
-        _customPrompt.value = ""
+        reset()
     }
 
     fun saveImageToGallery(): Boolean {
@@ -183,11 +190,18 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun reset() {
+        cancelAnalysis()
         _capturedImage.value = null
         _analysisResult.value = null
         _viewState.value = ViewState.Idle
         _errorMessage.value = null
         _customPrompt.value = ""
+    }
+
+    private fun cancelAnalysis() {
+        analysisJob?.cancel()
+        analysisJob = null
+        _isAnalyzing.value = false
     }
 
     fun refreshService() {
@@ -198,7 +212,7 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     fun getDefaultPrompts(): List<String> = DEFAULT_PROMPTS
 
     override fun onCleared() {
+        reset()
         super.onCleared()
-        _capturedImage.value?.recycle()
     }
 }

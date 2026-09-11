@@ -33,7 +33,7 @@
     <string name="feature_liveai_title">Live AI</string>
     <string name="feature_liveai_subtitle">实时对话</string>
     <string name="feature_translate_title">实时翻译</string>
-    <string name="feature_translate_subtitle">即时翻译</string>
+    <string name="feature_translate_subtitle">边说边听，实时查看译文</string>
     <string name="feature_leaneat_title">LeanEat</string>
     <string name="feature_leaneat_subtitle">卡路里识别</string>
     <string name="feature_wordlearn_title">WordLearn</string>

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="translate_title">Live translation</string>
+    <string name="translate_settings_title">Translation settings</string>
+    <string name="translate_start">Start translation</string>
+    <string name="translate_stop">Stop translation</string>
+    <string name="translate_idle">Ready when you are. Tap Start to translate.</string>
+    <string name="translate_wait_permission">Waiting for microphone permission…</string>
+    <string name="translate_wait_microphone">Preparing microphone…</string>
+    <string name="translate_connecting">Connecting to translation…</string>
+    <string name="translate_recording">Listening and translating</string>
+    <string name="translate_stopped_error">Translation stopped</string>
+    <string name="translate_language_pair">%1$s → %2$s</string>
+    <string name="translate_current_text">Translation</string>
+    <string name="translate_waiting_text">Your translation will appear here.</string>
+    <string name="translate_interim">Updating…</string>
+    <string name="translate_original">Original</string>
+    <string name="translate_input_phone">Input: phone microphone</string>
+    <string name="translate_input_glasses">Input: glasses microphone</string>
+    <string name="translate_phone_fallback">The glasses microphone was unavailable. Using the phone microphone instead.</string>
+    <string name="translate_camera_unavailable">Camera enhancement is unavailable. Audio translation can continue.</string>
+    <string name="translate_error_key">Add an Alibaba API key for the selected region in API settings, then try again.</string>
+    <string name="translate_error_microphone">Microphone permission is required. Tap Start to allow access, or enable it in Android app settings.</string>
+    <string name="translate_error_microphone_route">The microphone connection changed or is in use. Translation stopped. Check your audio connection, then tap Start to retry.</string>
+    <string name="translate_error_connection">Translation could not continue. Check your connection and Alibaba settings, then tap Start to retry.</string>
+    <string name="translate_privacy">While translation runs, audio and optional glasses camera frames are sent to Alibaba. Leaving this page stops translation. Text history stays only in app memory.</string>
+    <string name="translate_history">Recent translations</string>
+    <string name="translate_history_hint">Up to 50 stopped sessions, kept only in memory.</string>
+    <string name="translate_history_empty">No recent translations.</string>
+    <string name="translate_clear_history">Clear history</string>
+    <string name="translate_settings_next_start">Changes apply the next time you tap Start. This page does not activate a microphone or camera.</string>
+    <string name="translate_source_language">Source language</string>
+    <string name="translate_target_language">Target language</string>
+    <string name="translate_swap_languages">Swap languages</string>
+    <string name="translate_swap_unavailable">The current source language is not available as a spoken target.</string>
+    <string name="translate_voice">Translation voice</string>
+    <string name="translate_voice_hint">Only voices compatible with the target language can be selected.</string>
+    <string name="translate_audio_enabled">Spoken translation</string>
+    <string name="translate_audio_hint">Play translated speech as well as showing text.</string>
+    <string name="translate_image_enabled">Camera enhancement</string>
+    <string name="translate_image_hint">Share occasional glasses camera frames while translating to provide visual context. Requires camera permission.</string>
+    <string name="translate_use_phone_mic">Use phone microphone</string>
+    <string name="translate_phone_mic_hint">When off, try the glasses microphone first and use the phone if it is unavailable.</string>
+</resources>

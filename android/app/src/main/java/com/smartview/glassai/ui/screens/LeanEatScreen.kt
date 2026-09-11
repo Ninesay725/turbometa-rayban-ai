@@ -32,9 +32,10 @@ import com.smartview.glassai.viewmodels.LeanEatViewModel
 @Composable
 fun LeanEatScreen(
     viewModel: LeanEatViewModel = viewModel(),
-    currentFrame: Bitmap? = null,
+    @Suppress("UNUSED_PARAMETER") currentFrame: Bitmap? = null,
     onBackClick: () -> Unit,
-    onTakePhoto: () -> Unit
+    onTakePhoto: () -> Unit,
+    initialPhoto: Bitmap? = null,
 ) {
     val viewState by viewModel.viewState.collectAsState()
     val capturedImage by viewModel.capturedImage.collectAsState()
@@ -47,9 +48,13 @@ fun LeanEatScreen(
         onDispose { viewModel.reset() }
     }
 
-    // Update captured image when frame is available
-    LaunchedEffect(currentFrame) {
-        currentFrame?.let { viewModel.setCapturedImage(it) }
+    // The parent owns route streaming/capture. Live frames must not replace an analysis input.
+    // Keep currentFrame only for source compatibility; hand off a fresh capture via initialPhoto.
+    LaunchedEffect(viewModel, initialPhoto) {
+        initialPhoto?.let {
+            viewModel.reset()
+            viewModel.setCapturedImage(it)
+        }
     }
 
     Scaffold(

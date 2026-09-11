@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="translate_title">实时翻译</string>
+    <string name="translate_settings_title">翻译设置</string>
+    <string name="translate_start">开始翻译</string>
+    <string name="translate_stop">停止翻译</string>
+    <string name="translate_idle">准备就绪，点击开始即可翻译。</string>
+    <string name="translate_wait_permission">正在等待麦克风权限…</string>
+    <string name="translate_wait_microphone">正在准备麦克风…</string>
+    <string name="translate_connecting">正在连接翻译服务…</string>
+    <string name="translate_recording">正在聆听并翻译</string>
+    <string name="translate_stopped_error">翻译已停止</string>
+    <string name="translate_language_pair">%1$s → %2$s</string>
+    <string name="translate_current_text">译文</string>
+    <string name="translate_waiting_text">译文将显示在这里。</string>
+    <string name="translate_interim">更新中…</string>
+    <string name="translate_original">原文</string>
+    <string name="translate_input_phone">输入：手机麦克风</string>
+    <string name="translate_input_glasses">输入：眼镜麦克风</string>
+    <string name="translate_phone_fallback">眼镜麦克风不可用，已改用手机麦克风。</string>
+    <string name="translate_camera_unavailable">相机增强不可用，语音翻译可以继续。</string>
+    <string name="translate_error_key">请在 API 设置中为当前区域添加阿里云 API 密钥，然后重试。</string>
+    <string name="translate_error_microphone">翻译需要麦克风权限。请点击开始以允许访问，或在 Android 应用设置中开启权限。</string>
+    <string name="translate_error_microphone_route">麦克风连接已变化或正被占用，翻译已停止。请检查音频连接，然后点击开始重试。</string>
+    <string name="translate_error_connection">翻译无法继续。请检查网络和阿里云设置，然后点击开始重试。</string>
+    <string name="translate_privacy">翻译期间，音频及可选的眼镜相机画面会发送至阿里云。离开此页面即停止翻译。文字记录仅保存在应用内存中。</string>
+    <string name="translate_history">最近翻译</string>
+    <string name="translate_history_hint">最多保留 50 次已停止的翻译，仅存于内存。</string>
+    <string name="translate_history_empty">暂无翻译记录。</string>
+    <string name="translate_clear_history">清空记录</string>
+    <string name="translate_settings_next_start">更改将在下次点击开始时生效。打开此页面不会启用麦克风或相机。</string>
+    <string name="translate_source_language">源语言</string>
+    <string name="translate_target_language">目标语言</string>
+    <string name="translate_swap_languages">交换语言</string>
+    <string name="translate_swap_unavailable">当前源语言不支持作为语音输出的目标语言。</string>
+    <string name="translate_voice">翻译音色</string>
+    <string name="translate_voice_hint">仅可选择与目标语言兼容的音色。</string>
+    <string name="translate_audio_enabled">语音翻译播报</string>
+    <string name="translate_audio_hint">显示译文的同时播放翻译语音。</string>
+    <string name="translate_image_enabled">相机增强</string>
+    <string name="translate_image_hint">翻译时定期分享眼镜相机画面，提供视觉上下文。需要相机权限。</string>
+    <string name="translate_use_phone_mic">使用手机麦克风</string>
+    <string name="translate_phone_mic_hint">关闭时优先尝试眼镜麦克风；不可用时改用手机麦克风。</string>
+</resources>

@@ -35,7 +35,7 @@
     <string name="feature_quickvision_title">Quick Vision</string>
     <string name="feature_quickvision_subtitle">Say \"Jarvis\" to Identify</string>
     <string name="feature_translate_title">Real-time Translation</string>
-    <string name="feature_translate_subtitle">Coming Soon</string>
+    <string name="feature_translate_subtitle">Hear and read translations as you speak</string>
     <string name="feature_leaneat_title">LeanEat</string>
     <string name="feature_leaneat_subtitle">Smart Nutrition Analysis</string>
     <string name="feature_wordlearn_title">WordLearn</string>

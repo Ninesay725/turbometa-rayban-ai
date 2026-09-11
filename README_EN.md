@@ -9,11 +9,13 @@
 [![iOS](https://img.shields.io/badge/iOS-17.0%2B-blue.svg)](https://www.apple.com/ios/)
 [![Android](https://img.shields.io/badge/Android-12%2B-green.svg)](https://www.android.com/)
 [![Swift](https://img.shields.io/badge/Swift-5.0-orange.svg)](https://swift.org)
-[![Kotlin](https://img.shields.io/badge/Kotlin-1.9-purple.svg)](https://kotlinlang.org)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-purple.svg)](https://kotlinlang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/turbo1123)
 
 [English](./README_EN.md) | [简体中文](./README.md)
+
+The Android `android-v2` development branch now includes DAT0.9, OpenClaw, Display cards, opt-in WeChat previews and NetEase/汽水 music controls, a camera hub, cloud speech and live translation. Physical glasses, real third-party apps and cloud-account acceptance remain pending; this is not a released build. See the [Android guide](./android/README.md) and [current verification report](./docs/superpowers/reviews/phase-d/task-7-report.md).
 
 </div>
 
@@ -31,7 +33,7 @@
 
 **Voice chat, photo recognition, OpenClaw AI assistant — your glasses, connected to everything!**
 
-✅ **iOS v2.0.0** | ✅ **Android v2.0.0**
+✅ **iOS v2.0.0** | 🛠️ **Android v2.0.0 development build (hardware acceptance pending)**
 
 ☕ **Enjoying this project?** [**Buy me a coffee**](https://buymeacoffee.com/turbo1123) to support development!
 

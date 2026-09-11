@@ -14,7 +14,7 @@ Ray-Ban Meta 智能眼镜 AI 助手 Android 版本。
 
 ### Glasses Display | 眼镜显示
 
-Android 的 Display 卡片接入 Live AI、Quick Vision、LeanEat 与 OpenClaw，支持长结果翻页和眼镜按钮操作。设置 → 眼镜显示可关闭此能力；普通 Ray-Ban Meta 继续使用相机功能。首轮为纯文本卡片，微信通知与网易云/汽水音乐桥接属于后续阶段。
+Android 的 Display 卡片接入 Live AI、Quick Vision、LeanEat 与 OpenClaw，支持长结果翻页和眼镜按钮操作。设置 → 眼镜显示可关闭此能力；普通 Ray-Ban Meta 继续使用相机功能。微信通知与网易云/汽水音乐桥接已加入开发分支，需由用户分别开启并授予通知使用权；镜片和真实第三方应用的兼容性仍须真机验收。
 
 需要 Meta Ray-Ban Display 固件 V125+、Meta AI V282+，并在 Developer Mode 中安装眼镜端 DAT Wearables App。卡片共用功能正在使用的会话，不建立永久后台显示会话。Quick Vision 显示结果直到语音播报结束后再停留 15 秒；Live AI 增量更新最多每 600 ms 一次。
 
@@ -33,6 +33,20 @@ The Android implementation provides text cards for Live AI, Quick Vision, LeanEa
 - Wake word detection: Say "Jarvis" to trigger Quick Vision
 - 用眼镜拍照并获取 AI 分析
 - 唤醒词检测：说 "Jarvis" 触发快速识图
+
+### Camera and speech | 相机与朗读
+
+首页「相机」进入眼镜画面，可选 1/5/10/15 分钟自动停止。拍照使用 DAT 的新照片结果；预览可分享、识图或进行营养分析，图片在页面间只通过内存传递。分享仅在点击后生成临时 JPEG，识图和营养分析仍需明确点击分析按钮。
+
+Quick Vision 的状态语和结果统一使用 `qwen3-tts-flash` HTTP SSE 朗读，按现有阿里云区域和密钥设置调用；选择 OpenRouter、未配置阿里密钥或云端朗读失败时，回退系统语音。取消和离开页面不会触发回退。长文本分段，单次朗读总预算 60 秒；系统语音需要本机已安装相应语言数据。
+
+### Live Translate | 实时翻译
+
+首页「实时翻译」使用 `qwen3-livetranslate-flash-realtime`，沿用阿里云北京/新加坡区域密钥，独立于视觉 API 的提供商选择。设置提供 18 种源语言、11 种目标语言和 8 种音色，自动修正不兼容的语言/音色组合。点击开始并获得麦克风权限后才连接；服务端确认配置后才录音。眼镜麦克风连接失败会明确提示并回退手机麦克风。
+
+可选语音输出和画面增强；画面增强默认关闭，开启后才申请眼镜相机，发送不超过每秒两帧的缩小 JPEG。退出、后台运行或连接失败会停止录音、画面和播放。翻译记录仅在当前页面 ViewModel 的内存中保留最近 50 次会话，不写入磁盘。
+
+当前保留已批准的 Qwen3 协议配置和模型名称，没有自动切换 Qwen3.5。本地 HTTP/WebSocket 测试不能证明账号模型权限或区域服务可用性；真实云端、眼镜麦克风与镜片测试见 [Phase D 硬件/账号检查表](../docs/superpowers/reviews/phase-d/hardware-checklist.md)。
 
 ### Multi-Provider Support | 多提供商支持
 - **Vision API**: Alibaba Dashscope / OpenRouter (Gemini, Claude, etc.)

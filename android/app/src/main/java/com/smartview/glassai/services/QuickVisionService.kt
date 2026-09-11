@@ -12,8 +12,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.meta.wearable.dat.camera.types.PhotoData
@@ -36,7 +34,9 @@ import com.smartview.glassai.managers.APIProviderManager
 import com.smartview.glassai.managers.QuickVisionModeManager
 import com.smartview.glassai.utils.APIKeyManager
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,7 +52,7 @@ import java.util.Locale
  * Flow: Start stream → Capture photo → Stop stream → Analyze with Vision API → TTS announce
  * 1:1 port from iOS QuickVisionService
  */
-class QuickVisionService : Service(), TextToSpeech.OnInitListener {
+class QuickVisionService : Service() {
 
     companion object {
         private const val TAG = "QuickVisionService"
@@ -75,10 +75,8 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var tts: TextToSpeech? = null
-    private var isTtsReady = false
-    private val ttsInitialized = CompletableDeferred<Unit>()
-    private var utteranceSequence = 0L
+    private lateinit var speech: TTSService
+    private var speechJob: Job? = null
     private lateinit var apiKeyManager: APIKeyManager
     private lateinit var providerManager: APIProviderManager
     private lateinit var visionService: VisionAPIService
@@ -86,7 +84,6 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     private lateinit var modeManager: QuickVisionModeManager
     private val mainHandler = Handler(Looper.getMainLooper())
     private var systemLocale: Locale = Locale.getDefault()  // 系统语言，用于状态提示
-    private var outputLocale: Locale = Locale.US  // 输出语言，用于AI回复
 
     // DAT SDK: the camera is borrowed from the process-wide session owner through GlassesPhotoCapturer
     private val sessionManager: GlassesSessionManager by lazy { GlassesSessionManager.getInstance(this) }
@@ -110,42 +107,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         quickVisionStorage = QuickVisionStorage.getInstance(this)
         modeManager = QuickVisionModeManager.getInstance(this)
 
-        // Initialize TTS
-        tts = TextToSpeech(this, this)
-    }
-
-    override fun onInit(status: Int) {
-        Log.d(TAG, "TTS onInit called with status: $status")
-        if (status == TextToSpeech.SUCCESS) {
-            // 保存系统语言（用于状态提示）
-            systemLocale = Locale.getDefault()
-
-            // 保存输出语言（用于AI回复）
-            val language = apiKeyManager.getOutputLanguage()
-            outputLocale = when (language) {
-                "zh-CN" -> Locale.CHINESE
-                "en-US" -> Locale.US
-                "ja-JP" -> Locale.JAPANESE
-                "ko-KR" -> Locale.KOREAN
-                "es-ES" -> Locale("es", "ES")
-                "fr-FR" -> Locale.FRENCH
-                else -> Locale.US
-            }
-
-            // 初始使用系统语言（状态提示用）
-            val result = tts?.setLanguage(systemLocale)
-            isTtsReady = result != TextToSpeech.LANG_MISSING_DATA &&
-                    result != TextToSpeech.LANG_NOT_SUPPORTED
-
-            tts?.setSpeechRate(1.1f)
-
-            if (!isTtsReady) {
-                tts?.setLanguage(Locale.getDefault())
-                isTtsReady = true
-            }
-            Log.d(TAG, "TTS initialized - system: $systemLocale, output: $outputLocale")
-        }
-        ttsInitialized.complete(Unit)
+        speech = TTSService(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -168,8 +130,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         runs.stop()
         cleanup()
         scope.cancel()
-        tts?.stop()
-        tts?.shutdown()
+        speech.close()
 
         // Broadcast finished so PorcupineWakeWordService can reset isProcessing
         broadcastStatus("finished")
@@ -177,6 +138,9 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun cleanup() {
+        speechJob?.cancel()
+        speechJob = null
+        speech.stop()
         // A rerun invokes this only after the capturer's finally has completed. Destruction can
         // also call it as a synchronous safety net; no new run is accepted after runs.stop().
         sessionManager.stopCamera(OWNER)
@@ -195,12 +159,8 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         Log.d(TAG, "captureAndAnalyze called")
         runs.request {
             try {
-                // Wait for TTS to initialize
-                withTimeoutOrNull(2000) { ttsInitialized.await() }
-
                 // 1. Announce "looking"
                 val lookingText = getLocalizedString("looking")
-                Log.d(TAG, "Speaking: $lookingText")
                 speak(lookingText)
 
                 // Metadata can arrive after this service creates the manager. Wait before deciding
@@ -288,7 +248,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
 
                 result.fold(
                     onSuccess = { description ->
-                        Log.d(TAG, "Analysis result: $description")
+                        Log.d(TAG, "Analysis completed")
 
                         // Save record with thumbnail
                         val prompt = modeManager.getPrompt()
@@ -311,8 +271,8 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                         speakAndWait(description, useOutputLocale = true)  // AI reply uses the output language
                     },
                     onFailure = { error ->
-                        Log.e(TAG, "Analysis failed: ${error.message}")
-                        speak(getLocalizedString("analysis_failed"))
+                        Log.e(TAG, "Analysis failed: ${error.javaClass.simpleName}")
+                        speakAndWait(getLocalizedString("analysis_failed"))
                         broadcastError(error.message ?: "Unknown error")
                         broadcastStatus("error")
                         showNotice(getLocalizedString("analysis_failed"), DisplayIcon.EXCLAMATION_TRIANGLE)
@@ -327,7 +287,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
                 // and cleanup before allowing the next run to borrow the same owner name.
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Error in captureAndAnalyze: ${e.message}", e)
+                Log.e(TAG, "Capture or analysis failed: ${e.javaClass.simpleName}")
                 failAndDwell("error")
             }
         }
@@ -335,7 +295,7 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
 
     /** Announces [key] and dwells; the coordinator then releases the run and finishes the service. */
     private suspend fun failAndDwell(key: String) {
-        speak(getLocalizedString(key))
+        speakAndWait(getLocalizedString(key))
         broadcastStatus("error")
         showNotice(getLocalizedString(key), DisplayIcon.EXCLAMATION_TRIANGLE)
         delay(QuickVisionDisplayPolicy.dwellMs(sessionManager.displayState.value,
@@ -353,44 +313,19 @@ class QuickVisionService : Service(), TextToSpeech.OnInitListener {
         FrameConversions.frameToBitmap(videoFrame, FrameConversions.CAPTURE_JPEG_QUALITY)
 
     private fun speak(text: String, useOutputLocale: Boolean = false) {
-        if (!isTtsReady || text.isBlank()) return
-        // 根据需要切换语言
-        tts?.setLanguage(if (useOutputLocale) outputLocale else systemLocale)
-        Log.d(TAG, "Speaking: $text (locale: ${if (useOutputLocale) outputLocale else systemLocale})")
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "qv_${System.currentTimeMillis()}")
+        speechJob?.cancel()
+        speechJob = scope.launch { speech.speak(text, speechLanguage(useOutputLocale)) }
     }
 
     private suspend fun speakAndWait(text: String, useOutputLocale: Boolean = false) {
-        if (!isTtsReady || text.isBlank()) return
-        val engine = tts ?: return
-        val utteranceId = "qv_result_${++utteranceSequence}"
-        val outcome = awaitQuickVisionSpeech(
-            start = { complete ->
-                engine.setLanguage(if (useOutputLocale) outputLocale else systemLocale)
-                val listener = object : UtteranceProgressListener() {
-                    override fun onStart(id: String?) = Unit
-                    override fun onDone(id: String?) {
-                        if (id == utteranceId) complete(QuickVisionSpeechOutcome.DONE)
-                    }
-                    override fun onError(id: String?) {
-                        if (id == utteranceId) complete(QuickVisionSpeechOutcome.ERROR)
-                    }
-                    override fun onStop(id: String?, interrupted: Boolean) {
-                        if (id == utteranceId) complete(QuickVisionSpeechOutcome.STOPPED)
-                    }
-                }
-                engine.setOnUtteranceProgressListener(listener) == TextToSpeech.SUCCESS &&
-                    engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) == TextToSpeech.SUCCESS
-            },
-            stop = {
-                // Runs on the service's Main coroutine, also after timeout or cancellation.
-                // Removing the old listener before stopping prevents it from affecting a rerun.
-                engine.setOnUtteranceProgressListener(null)
-                engine.stop()
-            },
-        )
-        if (outcome != QuickVisionSpeechOutcome.DONE) Log.w(TAG, "Result speech ended: $outcome")
+        speechJob?.cancelAndJoin()
+        speechJob = null
+        // The run's cancellation stops speech; only completed audible output precedes dwell.
+        if (!speech.speak(text, speechLanguage(useOutputLocale))) Log.w(TAG, "Result speech unavailable")
     }
+
+    private fun speechLanguage(useOutputLocale: Boolean): String =
+        if (useOutputLocale) apiKeyManager.getOutputLanguage() else systemLocale.toLanguageTag()
 
     private fun getLocalizedString(key: String): String {
         // 使用系统语言来显示状态提示

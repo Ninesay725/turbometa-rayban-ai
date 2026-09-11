@@ -1,5 +1,6 @@
 package com.smartview.glassai.ui.navigation
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Message
@@ -48,6 +49,8 @@ sealed class Screen(val route: String) {
     object OpenClaw : Screen("openclaw")
     object OpenClawSettings : Screen("openclaw_settings")
     object NotificationBridge : Screen("notification_bridge")
+    object LiveTranslate : Screen("live_translate")
+    object LiveTranslateSettings : Screen("live_translate_settings")
 }
 
 sealed class BottomNavItem(
@@ -70,6 +73,8 @@ fun TurboMetaNavigation(
 ) {
     val navController = rememberNavController()
     val lifecycleOwner = LocalLifecycleOwner.current
+    // Photo handoff is RAM-only, outside navigation saved state.
+    val photoHandoff = remember { PhotoHandoff<Bitmap>() }
 
     LaunchedEffect(navigationRequests, lifecycleOwner) {
         // This owner is the Activity (outside NavHost). Cancel the collector on STOP so
@@ -168,7 +173,8 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToNotificationBridge = {
                         navController.navigate(Screen.NotificationBridge.route) { launchSingleTop = true }
-                    }
+                    },
+                    onNavigateToTranslate = { navController.navigate(Screen.LiveTranslate.route) }
                 )
             }
 
@@ -183,29 +189,19 @@ fun TurboMetaNavigation(
             }
 
             composable(Screen.LeanEat.route) {
-                val currentFrame by wearablesViewModel.currentFrame.collectAsState()
-                LeanEatScreen(
-                    currentFrame = currentFrame,
-                    onBackClick = {
-                        navController.popBackStack()
-                    },
-                    onTakePhoto = {
-                        wearablesViewModel.takePhoto()
-                    }
-                )
+                val photo = remember { photoHandoff.take(Screen.LeanEat.route) }
+                AnalysisPhotoRoute(wearablesViewModel, photo, onRequestWearablesPermission, keepDisplaySession = true) { fresh, frame, capture ->
+                    LeanEatScreen(currentFrame = frame, initialPhoto = fresh,
+                        onBackClick = { navController.popBackStack() }, onTakePhoto = capture)
+                }
             }
 
             composable(Screen.Vision.route) {
-                val currentFrame by wearablesViewModel.currentFrame.collectAsState()
-                VisionScreen(
-                    currentFrame = currentFrame,
-                    onBackClick = {
-                        navController.popBackStack()
-                    },
-                    onTakePhoto = {
-                        wearablesViewModel.takePhoto()
-                    }
-                )
+                val photo = remember { photoHandoff.take(Screen.Vision.route) }
+                AnalysisPhotoRoute(wearablesViewModel, photo, onRequestWearablesPermission) { fresh, frame, capture ->
+                    VisionScreen(currentFrame = frame, initialPhoto = fresh,
+                        onBackClick = { navController.popBackStack() }, onTakePhoto = capture)
+                }
             }
 
             composable(Screen.QuickVision.route) {
@@ -244,12 +240,24 @@ fun TurboMetaNavigation(
                     },
                     onNavigateToNotificationBridge = {
                         navController.navigate(Screen.NotificationBridge.route) { launchSingleTop = true }
-                    }
+                    },
+                    onNavigateToTranslateSettings = { navController.navigate(Screen.LiveTranslateSettings.route) }
                 )
             }
 
             composable(Screen.NotificationBridge.route) {
                 NotificationBridgeScreen(onBackClick = { navController.popBackStack() })
+            }
+
+            composable(Screen.LiveTranslate.route) {
+                LiveTranslateScreen(wearablesViewModel = wearablesViewModel,
+                    onBackClick = { navController.popBackStack() },
+                    onSettingsClick = { navController.navigate(Screen.LiveTranslateSettings.route) },
+                    onRequestWearablesPermission = onRequestWearablesPermission)
+            }
+
+            composable(Screen.LiveTranslateSettings.route) {
+                LiveTranslateSettingsScreen(onBackClick = { navController.popBackStack() })
             }
 
             composable(Screen.Records.route) {
@@ -269,11 +277,18 @@ fun TurboMetaNavigation(
             }
 
             composable(Screen.LiveStream.route) {
-                SimpleLiveStreamScreen(
+                CameraScreen(
                     wearablesViewModel = wearablesViewModel,
-                    onBackClick = {
-                        navController.popBackStack()
-                    }
+                    onBackClick = { navController.popBackStack() },
+                    onAnalyzePhoto = { photo ->
+                        photoHandoff.put(Screen.Vision.route, photo)
+                        navController.navigate(Screen.Vision.route)
+                    },
+                    onNutritionPhoto = { photo ->
+                        photoHandoff.put(Screen.LeanEat.route, photo)
+                        navController.navigate(Screen.LeanEat.route)
+                    },
+                    onRequestWearablesPermission = onRequestWearablesPermission
                 )
             }
 
