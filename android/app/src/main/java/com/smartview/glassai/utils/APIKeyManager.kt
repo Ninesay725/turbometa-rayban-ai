@@ -277,20 +277,36 @@ class APIKeyManager(context: Context) {
     }
 
     fun saveRtmpStreamKey(key: String) {
-        if (key.isBlank()) deleteRtmpStreamKey() else sharedPreferences.edit().putString(KEY_RTMP_STREAM_KEY, key.trim()).apply()
+        try {
+            if (key.isBlank()) deleteRtmpStreamKey() else sharedPreferences.edit().putString(KEY_RTMP_STREAM_KEY, key.trim()).apply()
+        } catch (e: Exception) {
+            // Never log the key itself, only the failure.
+            Log.e(TAG, "Failed to save RTMP stream key: ${e.message}")
+        }
     }
 
     fun deleteRtmpStreamKey() {
-        sharedPreferences.edit().remove(KEY_RTMP_STREAM_KEY).apply()
+        try {
+            sharedPreferences.edit().remove(KEY_RTMP_STREAM_KEY).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete RTMP stream key: ${e.message}")
+        }
     }
 
-    fun getRtmpBitrate(): Int {
+    fun getRtmpBitrate(): Int = try {
         val value = sharedPreferences.getInt(KEY_RTMP_BITRATE, 0)
-        return if (value > 0) value else DEFAULT_RTMP_BITRATE
+        if (value > 0) value else DEFAULT_RTMP_BITRATE
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to read RTMP bitrate: ${e.message}")
+        DEFAULT_RTMP_BITRATE
     }
 
     fun saveRtmpBitrate(bitrate: Int) {
-        sharedPreferences.edit().putInt(KEY_RTMP_BITRATE, bitrate).apply()
+        try {
+            sharedPreferences.edit().putInt(KEY_RTMP_BITRATE, bitrate).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save RTMP bitrate: ${e.message}")
+        }
     }
 
     // MARK: - OpenClaw (Phase B)

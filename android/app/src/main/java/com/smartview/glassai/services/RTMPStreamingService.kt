@@ -5,6 +5,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.pedro.rtmp.rtmp.RtmpClient
 import com.pedro.rtmp.utils.ConnectCheckerRtmp
 import com.smartview.glassai.utils.RtmpUrlSplitter
@@ -21,6 +22,7 @@ import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -45,6 +47,20 @@ class RTMPStreamingService(private val context: Context) {
 
         // MIME type for H.264
         private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC
+
+        /**
+         * Pure "should the output loop start" decision, pulled out of [startStreaming] so it can
+         * be unit-tested on the JVM (the surrounding code needs MediaCodec/RtmpClient, which
+         * require an Android runtime). `RtmpClient.connect()` (rtmp 2.2.6) can call
+         * `onConnectionFailedRtmp()` SYNCHRONOUSLY on a malformed URL, which re-enters
+         * stopStreaming() and tears both down before connect() even returns; starting the loop
+         * on a null encoder spins one IO thread at 100% CPU forever (dequeueOutputBuffer returns
+         * -1 with no exception, so the loop's own failure guard never trips). `Any?` keeps this
+         * free of Android/rtmp types so a plain test double can stand in for either argument.
+         */
+        @VisibleForTesting
+        internal fun canStartOutputLoop(encoder: Any?, client: Any?): Boolean =
+            encoder != null && client != null
     }
 
     // Streaming states
@@ -90,6 +106,13 @@ class RTMPStreamingService(private val context: Context) {
     // RtmpClient.disconnect() does socket I/O and must not run on the caller's (often Main)
     // thread (ledger T6). One thread keeps disconnects ordered; release() drains and stops it.
     private val disconnectExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "rtmp-disconnect") }
+
+    // Bumped once per RtmpClient created in startStreaming(). Each ConnectCheckerRtmp captures the
+    // generation it was built for and compares against this on every callback (fix-round-1 T2):
+    // a callback that fires after its client has been replaced or retired (a late async callback
+    // racing a subsequent start/stop) sees a mismatch and returns instead of mutating state on
+    // behalf of a client nobody holds a reference to anymore.
+    private val connectionGeneration = AtomicLong(0)
 
     @Volatile
     private var encoder: MediaCodec? = null
@@ -152,30 +175,39 @@ class RTMPStreamingService(private val context: Context) {
                 return@withContext false
             }
 
+            // Fresh generation for this client/checker pair (fix-round-1 T2 — see
+            // connectionGeneration's doc comment).
+            val myGeneration = connectionGeneration.incrementAndGet()
+
             // Initialize RTMP client
             rtmpClient = RtmpClient(object : ConnectCheckerRtmp {
                 override fun onConnectionStartedRtmp(rtmpUrl: String) {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.d(TAG, "RTMP connection started: ${RtmpUrlSplitter.split(rtmpUrl).first}")
                 }
 
                 override fun onConnectionSuccessRtmp() {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.d(TAG, "RTMP connected successfully")
                     _state.value = StreamingState.Streaming
                     startTime = System.currentTimeMillis()
                 }
 
                 override fun onConnectionFailedRtmp(reason: String) {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.e(TAG, "RTMP connection failed: $reason")
                     _state.value = StreamingState.Error(reason)
                     stopStreaming()
                 }
 
                 override fun onNewBitrateRtmp(bitrate: Long) {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.d(TAG, "RTMP bitrate: $bitrate")
                     updateStats(bitrate = bitrate)
                 }
 
                 override fun onDisconnectRtmp() {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.d(TAG, "RTMP disconnected")
                     // Invoked synchronously by RtmpClient.disconnect(), i.e. from inside
                     // stopStreaming() after a user Stop or after onConnectionFailedRtmp() set
@@ -186,20 +218,37 @@ class RTMPStreamingService(private val context: Context) {
                 }
 
                 override fun onAuthErrorRtmp() {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.e(TAG, "RTMP auth error")
                     _state.value = StreamingState.Error("Authentication failed")
                 }
 
                 override fun onAuthSuccessRtmp() {
+                    if (myGeneration != connectionGeneration.get()) return
                     Log.d(TAG, "RTMP auth success")
                 }
             })
 
+            // isStreaming must flip true BEFORE connect(): RtmpClient.connect() (rtmp 2.2.6) calls
+            // onConnectionFailedRtmp() SYNCHRONOUSLY when the URL is malformed, which re-enters
+            // stopStreaming() and tears the encoder/client down before connect() even returns
+            // (fix-round-1 T1). Setting it here lets that nested stopStreaming() observe
+            // isStreaming == true and correctly flip it back to false as its first statement.
+            isStreaming = true
+            frameCount = 0
+
             // Connect to RTMP server
             rtmpClient?.connect(rtmpUrl)
 
-            isStreaming = true
-            frameCount = 0
+            // A synchronous connect() failure already tore everything down via the nested
+            // stopStreaming() above: encoder released/nulled, rtmpClient nulled, isStreaming
+            // cleared, and the Error state preserved. Do not start the output loop in that case
+            // (it would spin one IO thread at 100% CPU on a null encoder) and do not touch _state
+            // — onConnectionFailedRtmp already published the Error.
+            if (!canStartOutputLoop(encoder, rtmpClient)) {
+                isStreaming = false
+                return@withContext false
+            }
 
             // Start encoder output processing
             startEncoderOutputProcessing()
@@ -293,8 +342,14 @@ class RTMPStreamingService(private val context: Context) {
 
             failure?.let { e ->
                 Log.e(TAG, "Encoder output error: ${e.message}", e)
-                _state.value = StreamingState.Error("Encoder failed: ${e.message ?: e.javaClass.simpleName}")
-                stopStreaming() // keeps the Error (see the guard at its end)
+                // A concurrent user Stop may already have flipped isStreaming to false and moved
+                // the state to Idle between the catch above and here (fix-round-1 T3): don't
+                // follow a normal Stop with an error card. stopStreaming() below still runs either
+                // way — it's idempotent/safe if a Stop already completed it.
+                if (isStreaming) {
+                    _state.value = StreamingState.Error("Encoder failed: ${e.message ?: e.javaClass.simpleName}")
+                }
+                stopStreaming() // keeps the Error set just above (see the guard at its end)
             }
         }
     }
