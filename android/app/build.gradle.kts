@@ -43,6 +43,10 @@ android {
         manifestPlaceholders["mwdat_client_token"] =
             providers.gradleProperty("mwdat_client_token").orNull
                 ?: localProperties.getProperty("mwdat_client_token", "0")
+
+        // DAT SDK version for device.info (OpenClaw) and the Settings About row, fed from the
+        // version catalog so it cannot drift from the dependency.
+        buildConfigField("String", "MWDAT_VERSION", "\"${libs.versions.mwdat.get()}\"")
     }
 
     signingConfigs {

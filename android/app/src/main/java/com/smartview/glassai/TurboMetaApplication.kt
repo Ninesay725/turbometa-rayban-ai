@@ -1,10 +1,21 @@
 package com.smartview.glassai
 
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import android.util.Log
 import com.meta.wearable.dat.core.Wearables
+import com.smartview.glassai.services.openclaw.OpenClawIntegration
 
 class TurboMetaApplication : Application() {
+
+    @Volatile
+    private var startedActivities = 0
+
+    /** True while at least one Activity is started (spec §1: no background camera.snap). */
+    val isInForeground: Boolean
+        get() = startedActivities > 0
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -13,6 +24,19 @@ class TurboMetaApplication : Application() {
         Wearables.initialize(this).onFailure { error, _ ->
             Log.e(TAG, "DAT SDK initialize failed: ${error.description}")
         }
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) { startedActivities++ }
+            override fun onActivityStopped(activity: Activity) { startedActivities = (startedActivities - 1).coerceAtLeast(0) }
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
+        // OpenClaw node commands (camera.snap etc.) route through the shared glasses session.
+        // Nothing here touches the session manager, EncryptedSharedPreferences or the Ed25519 seed
+        // until the first connect()/command; install() itself never throws.
+        OpenClawIntegration.install(this)
     }
 
     companion object {

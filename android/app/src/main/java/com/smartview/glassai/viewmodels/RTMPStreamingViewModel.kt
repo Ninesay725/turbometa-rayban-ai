@@ -348,9 +348,19 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     /** Defensive copy of the SDK frame; null if the buffer could not be read. */
     private fun copyFrame(videoFrame: VideoFrame): ByteArray? = FrameConversions.copyI420(videoFrame)
 
+    /**
+     * Decodes the preview bitmap and, exactly like WearablesViewModel, publishes it to the shared
+     * manager under this owner id. Without this latestFrame stays null for the whole broadcast and
+     * an OpenClaw camera.snap would fall through to GlassesPhotoCapturer, which can only answer
+     * CameraBusy while this ViewModel holds the camera. Same accepted trade-off as Live AI: the
+     * published bitmap is the preview decode (JPEG quality 50), so such a snap is double-lossy.
+     */
     private fun updatePreview(i420: ByteArray, width: Int, height: Int) {
         val bitmap = FrameConversions.i420ToBitmap(i420, width, height, FrameConversions.PREVIEW_JPEG_QUALITY)
-        if (bitmap != null) _previewFrame.value = bitmap
+        if (bitmap != null) {
+            _previewFrame.value = bitmap
+            sessionManager.publishFrame(OWNER, bitmap)
+        }
     }
 
     private fun cancelCameraJobs() {
