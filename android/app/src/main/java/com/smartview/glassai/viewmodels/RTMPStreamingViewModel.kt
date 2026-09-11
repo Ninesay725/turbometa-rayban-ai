@@ -110,6 +110,15 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     @Volatile
     private var frameTimestampBase = 0L
 
+    /**
+     * "A frame arrived in THIS attempt" (Task 9 D-6). videoWidth used to double as this flag, but
+     * it survived a failed attempt, so on the next Start handleVideoFrame() never re-entered the
+     * first-frame branch: connectRtmp() was never called and armFirstFrameTimeout() was a no-op,
+     * leaving the UI in "Connecting" forever. Reset in startStreaming() and teardownCamera().
+     */
+    @Volatile
+    private var firstFrameSeen = false
+
     init {
         apiKeyManager.getRtmpUrl()?.takeIf { it.isNotBlank() }?.let { _rtmpUrl.value = it }
         apiKeyManager.getRtmpStreamKey()?.let { _streamKey.value = it }
@@ -138,8 +147,18 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
                     }
                     is RTMPStreamingService.StreamingState.Error -> {
                         _uiState.value = UIState.Error(state.message)
+                        // An RTMP failure ends the attempt (Task 9 D-6/D-7). The borrowed camera
+                        // must not keep streaming behind the error card: it burns ~50 % CPU, holds
+                        // the session claim and answers every other feature with CameraBusy.
+                        // teardownCamera() never writes _uiState, so the error card stays up.
+                        teardownCamera()
                     }
                     is RTMPStreamingService.StreamingState.Disconnected -> {
+                        // Unreachable with rtmp 2.2.6: the library never calls onDisconnectRtmp()
+                        // for a live drop, so neither this branch nor R.string.rtmp_disconnected
+                        // fires today. Both are kept deliberately — a library upgrade that starts
+                        // reporting drops makes them live without another change (final review
+                        // Minor 5).
                         // The service only emits this while isStreaming (an unexpected drop of a
                         // live stream); the VM double-checks so a late callback after a user Stop
                         // (already Idle) or after a failure (already Error) can never overwrite them.
@@ -194,6 +213,13 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         }
 
         Log.d(TAG, "Starting streaming to: ${_rtmpUrl.value}")
+        // Per-attempt state, always reset here (Task 9 D-6): a previous attempt that saw frames
+        // would otherwise leave videoWidth != 0 and skip the connectRtmp() / first-frame-timeout
+        // branch for the rest of the screen's life.
+        videoWidth = 0
+        videoHeight = 0
+        frameTimestampBase = 0L
+        firstFrameSeen = false
         // A previous UIState.Error is cleared here (it is now kept until the user acts on it).
         _uiState.value = UIState.Connecting
 
@@ -204,13 +230,19 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     private fun startCameraStream() {
         cancelCameraJobs()
         camera = null
+        // Defensive only: every path that ends an attempt (stopStreaming / failCamera / the
+        // service Error branch) now runs teardownCamera(), so we must not hold the camera here.
+        // A same-session hand-off is what produced the Stop ANR in Task 9 D-7.
+        if (sessionManager.currentCameraOwner == OWNER) {
+            Log.w(TAG, "start: the camera was still borrowed from a previous attempt")
+        }
         sessionManager.stopCamera(OWNER)
 
         val videoQuality = WearablesViewModel.videoQualityFromSetting(apiKeyManager.getVideoQuality())
         Log.d(TAG, "Starting camera stream with quality: $videoQuality")
 
         startJob = viewModelScope.launch {
-            sessionManager.acquire(OWNER)
+            sessionManager.acquire(OWNER, forCamera = true)
             when (sessionManager.ensureSessionStarted(SESSION_START_TIMEOUT_MS)) {
                 SessionStartResult.STARTED -> Unit
                 SessionStartResult.CREATE_FAILED -> {
@@ -296,13 +328,13 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     /**
      * The glasses report STREAMING but may never deliver a decodable frame (ledger T5: RTMP could
      * stick in Connecting with no stream budget). Fail after FIRST_FRAME_TIMEOUT_MS unless a frame
-     * arrived (videoWidth != 0) or the RTMP service already moved on.
+     * arrived in this attempt ([firstFrameSeen]) or the RTMP service already moved on.
      */
     private fun armFirstFrameTimeout() {
         firstFrameJob?.cancel()
         firstFrameJob = viewModelScope.launch {
             delay(FIRST_FRAME_TIMEOUT_MS)
-            if (videoWidth == 0 && _uiState.value == UIState.Connecting) {
+            if (!firstFrameSeen && _uiState.value == UIState.Connecting) {
                 Log.e(TAG, "no video frame within ${FIRST_FRAME_TIMEOUT_MS}ms")
                 rtmpService.stopStreaming()
                 failCamera(getApplication<Application>().getString(R.string.rtmp_first_frame_timeout))
@@ -312,11 +344,7 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
 
     private fun failCamera(message: String) {
         Log.e(TAG, "Camera failure: $message")
-        cancelCameraJobs()
-        camera = null
-        sessionManager.stopCamera(OWNER)
-        sessionManager.release(OWNER)
-        _cameraState.value = null
+        teardownCamera()
         _uiState.value = UIState.Error(message)
     }
 
@@ -346,8 +374,9 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
         val width = videoFrame.width
         val height = videoFrame.height
 
-        // Set video dimensions on first frame and connect RTMP
-        if (videoWidth == 0 || videoHeight == 0) {
+        // Set video dimensions on the first frame OF THIS ATTEMPT and connect RTMP
+        if (!firstFrameSeen) {
+            firstFrameSeen = true
             // Use original dimensions - modern MediaCodec handles alignment internally
             videoWidth = width
             videoHeight = height
@@ -401,26 +430,33 @@ class RTMPStreamingViewModel(application: Application) : AndroidViewModel(applic
     }
 
     /**
+     * Ends the current camera attempt: cancels the jobs, gives the camera and the session claim
+     * back and resets the per-attempt video state. Never writes [_uiState] — the caller owns that,
+     * so the RTMP error card survives the teardown (final review C2).
+     */
+    private fun teardownCamera() {
+        cancelCameraJobs()
+        camera = null
+        sessionManager.stopCamera(OWNER)
+        sessionManager.release(OWNER)
+        videoWidth = 0
+        videoHeight = 0
+        frameTimestampBase = 0L
+        firstFrameSeen = false
+        _previewFrame.value = null
+        _cameraState.value = null
+    }
+
+    /**
      * Stop streaming
      */
     fun stopStreaming() {
         Log.d(TAG, "Stopping streaming")
 
-        // Stop RTMP service
+        // Stop RTMP service, then give the camera and the session claim back
         rtmpService.stopStreaming()
+        teardownCamera()
 
-        // Give the camera and the session claim back
-        cancelCameraJobs()
-        camera = null
-        sessionManager.stopCamera(OWNER)
-        sessionManager.release(OWNER)
-
-        // Reset
-        videoWidth = 0
-        videoHeight = 0
-        frameTimestampBase = 0L
-        _previewFrame.value = null
-        _cameraState.value = null
         // A stream error must stay visible: the STOPPED transition that normally follows a stream
         // error (attachCamera's stateJob, hasBeenActive branch) must not blink the error away by
         // falling back to Idle here. An explicit user-initiated stop clears the error first (see

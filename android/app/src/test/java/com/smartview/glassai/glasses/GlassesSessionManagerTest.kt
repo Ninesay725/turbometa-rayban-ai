@@ -532,6 +532,7 @@ class GlassesSessionManagerTest {
         manager.resetForTests()
 
         assertEquals(0, manager.ownerCount)
+        assertFalse(manager.hasCameraClaim)
         assertFalse(manager.hasSession)
         assertNull(manager.currentCameraOwner)
         assertNull(manager.latestFrame.value)
@@ -570,6 +571,79 @@ class GlassesSessionManagerTest {
         observer.throwOnFlow = false
         observer.device.value = rayban
         manager.startMonitoring() // must actually retry, not silently no-op
+
+        assertEquals(rayban, manager.activeDevice.value)
+    }
+
+    // ---- final review C1/I2: camera intent vs session-only claim, restartable monitoring ----
+
+    /**
+     * The manager must tell a *camera* claim from a session-only claim (final review C1): the
+     * OpenClaw chat holds the session so a snap does not pay the 12 s session start, but it never
+     * streams, so it must not make SessionFrameProvider think a feature is about to publish frames.
+     */
+    @Test
+    fun cameraIntentFollowsAcquireAndRelease() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+
+        manager.acquire("A", forCamera = true)
+        assertTrue(manager.hasCameraClaim)
+
+        manager.acquire("OpenClawChat") // session only, default forCamera = false
+        assertEquals(2, manager.ownerCount)
+        assertTrue(manager.hasCameraClaim)
+
+        manager.release("A")
+        assertEquals(1, manager.ownerCount)
+        assertFalse(manager.hasCameraClaim)
+
+        manager.release("OpenClawChat")
+        assertEquals(0, manager.ownerCount)
+        assertFalse(manager.hasCameraClaim)
+    }
+
+    /**
+     * A session-only owner never counts as a camera claim, but a borrowed camera always does —
+     * even for an owner that never declared the intent.
+     */
+    @Test
+    fun sessionOnlyOwnerDoesNotCountAsCameraClaim() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+
+        manager.acquire("OpenClawChat")
+        assertEquals(1, manager.ownerCount)
+        assertFalse(manager.hasCameraClaim)
+
+        factory.last.emitStarted()
+        manager.addCamera("OpenClawChat", config)
+        assertTrue(manager.hasCameraClaim)
+
+        manager.stopCamera("OpenClawChat")
+        assertFalse(manager.hasCameraClaim)
+    }
+
+    /**
+     * Final review I2a: the `.catch {}` inside startMonitoring() swallows a collection failure,
+     * which *completes* the flow — runCatching sees success, so the old code left `deviceJob`
+     * pointing at a finished Job and every later startMonitoring() was a permanent no-op. A dead
+     * observer must be restartable (MainActivity re-arms monitoring after the Bluetooth grant).
+     */
+    @Test
+    fun startMonitoringRestartsAfterTheDeviceFlowCompletes() = runTest(UnconfinedTestDispatcher()) {
+        observer.failOnCollect = true
+        val manager = GlassesSessionManager(
+            sessionFactory = factory,
+            deviceObserver = observer,
+            scope = backgroundScope,
+            displayAttacher = attacher,
+        )
+
+        manager.startMonitoring()
+        assertNull(manager.activeDevice.value)
+
+        observer.failOnCollect = false
+        observer.device.value = rayban
+        manager.startMonitoring() // the dead collector must be replaced, not skipped
 
         assertEquals(rayban, manager.activeDevice.value)
     }

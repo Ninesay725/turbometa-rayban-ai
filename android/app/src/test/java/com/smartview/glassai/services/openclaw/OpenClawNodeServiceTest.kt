@@ -475,7 +475,32 @@ class OpenClawNodeServiceTest {
         assertEquals(Proxy.NO_PROXY, client.proxy)
         assertEquals(10_000, client.connectTimeoutMillis)
         assertEquals(0, client.readTimeoutMillis)
+        // Final review I5: without a ping the socket stays half-open when the phone roams off
+        // Wi-Fi and the UI shows Connected for minutes. A missing pong fails the socket instead.
+        assertEquals(20_000, client.pingIntervalMillis)
         client.dispatcher.executorService.shutdown()
+    }
+
+    /**
+     * Final review I3: a `connect` rejected with anything but NOT_PAIRED (auth/protocol error) used
+     * to leave the app in "Connecting..." forever — the gateway keeps the socket open, so no
+     * disconnect callback ever arrives and nothing retries. It must become
+     * Error(Transport(...)) and stop reconnecting (a wrong token is not fixed by retrying).
+     */
+    @Test
+    fun connectRejectedWithAnotherCodeBecomesATransportErrorAndStopsReconnecting() {
+        gateway.connectReply = ScriptedGateway.ConnectReply.REJECT
+        val service = startGatewayAndConnect(upgrades = 3)
+
+        val state = service.connectionState.awaitValue { it is OpenClawConnectionState.Error }
+        val reason = (state as OpenClawConnectionState.Error).reason
+        assertTrue("expected Transport but was $reason", reason is OpenClawErrorReason.Transport)
+        assertTrue((reason as OpenClawErrorReason.Transport).detail.contains("UNAUTHORIZED"))
+
+        Thread.sleep(400) // > 3x the 100 ms test backoff: nothing may dial again
+        assertEquals(1, gateway.opens)
+        assertFalse(service.isTickRunning)
+        assertEquals(state, service.connectionState.value)
     }
 
     @Test

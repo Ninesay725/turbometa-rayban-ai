@@ -11,7 +11,6 @@ import androidx.lifecycle.viewModelScope
 import com.smartview.glassai.R
 import com.smartview.glassai.glasses.GlassesFrameProvider
 import com.smartview.glassai.glasses.GlassesSessionManager
-import com.smartview.glassai.glasses.SessionFrameProvider
 import com.smartview.glassai.glasses.SnapshotResult
 import com.smartview.glassai.managers.APIProvider
 import com.smartview.glassai.managers.APIProviderManager
@@ -22,6 +21,7 @@ import com.smartview.glassai.services.HttpClients
 import com.smartview.glassai.services.SpeechRecognizerSession
 import com.smartview.glassai.services.openclaw.OpenClawChatMessage
 import com.smartview.glassai.services.openclaw.OpenClawConnectionState
+import com.smartview.glassai.services.openclaw.OpenClawIntegration
 import com.smartview.glassai.services.openclaw.OpenClawNodeService
 import com.smartview.glassai.utils.APIKeyManager
 import java.util.Base64
@@ -39,7 +39,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * State for OpenClawChatScreen (research §5.1). Messages live only in memory (spec §3 decision 3).
  * Entering the chat acquires the shared glasses session (spec §3 decision 1) so a snap does not
- * pay the session start; the camera itself is borrowed per snap by SessionFrameProvider.
+ * pay the session start; the camera itself is borrowed per snap by the process-wide
+ * SessionFrameProvider (OpenClawIntegration.frameProvider). The claim is deliberately session-only
+ * (no camera intent), so it never blocks a snap — see GlassesSessionManager.hasCameraClaim.
  */
 class OpenClawViewModel internal constructor(
     application: Application,
@@ -59,7 +61,9 @@ class OpenClawViewModel internal constructor(
     constructor(application: Application) : this(
         application = application,
         service = OpenClawNodeService.getInstance(application),
-        frames = SessionFrameProvider.create(application),
+        // One provider per process: two instances would both borrow the camera as
+        // "OpenClawSnap" and could release each other's claim (final review I1).
+        frames = OpenClawIntegration.frameProvider(application),
         sessionManager = { GlassesSessionManager.getInstance(application) },
         asrFactory = { key, endpoint, source ->
             FunASRService(
@@ -326,19 +330,27 @@ class OpenClawViewModel internal constructor(
         }
         // Named asrService on purpose: `service` is the OpenClawNodeService property.
         val asrService = asrFactory(key, alibabaEndpoint(), source).apply {
-            onPartialResult = { partial -> _asrPartial.value = partial }
+            // FunASRService fires these on an OkHttp thread. Every one of them writes state
+            // that Main also writes (_asrText / _asrPartial, and through stopListening() the
+            // listenJob / asr fields), so they are hopped onto viewModelScope (Main) — final
+            // review Minor 7.
+            onPartialResult = { partial -> viewModelScope.launch { _asrPartial.value = partial } }
             onFinalResult = { sentence ->
-                _asrText.value = (_asrText.value + sentence)
-                _asrPartial.value = ""
+                viewModelScope.launch {
+                    _asrText.value = (_asrText.value + sentence)
+                    _asrPartial.value = ""
+                }
             }
             onError = { message ->
-                _asrError.value = str(R.string.openclaw_chat_asr_failed).format(localizeAsrError(message))
-                stopListening()
+                viewModelScope.launch {
+                    _asrError.value = str(R.string.openclaw_chat_asr_failed).format(localizeAsrError(message))
+                    stopListening()
+                }
             }
             // The recognizer ended on its own (task-finished): it has already closed its socket, so
             // only the flags and the SCO route are ours to clean up — calling stop() again here
             // would re-enter FunASRService.stop() from inside its own callback.
-            onFinished = { finishListening() }
+            onFinished = { viewModelScope.launch { finishListening() } }
         }
         asr = asrService
         asrService.start()

@@ -175,6 +175,11 @@ class WearablesViewModel internal constructor(
     private fun str(@StringRes id: Int): String = strings(id)
 
     fun startMonitoring() {
+        // Always re-arm the shared device observer first (final review I2b): MainActivity calls
+        // this once the Bluetooth runtime permissions are granted, and the manager's observer may
+        // have been started before the grant (and died) or never started at all. startMonitoring()
+        // is idempotent while the collector is alive and restarts it when it is not.
+        sessionManager.startMonitoring()
         if (monitoringStarted) return
         monitoringStarted = true
 
@@ -358,7 +363,7 @@ class WearablesViewModel internal constructor(
         Log.d(TAG, "Using video quality: $quality")
 
         startJob = viewModelScope.launch {
-            sessionManager.acquire(OWNER)
+            sessionManager.acquire(OWNER, forCamera = true)
             // Leave-and-re-enter: the previous session may still be STOPPING in the SDK, so the
             // create happens inside ensureSessionStarted() once STOPPED has been observed.
             when (sessionManager.ensureSessionStarted(SESSION_START_TIMEOUT_MS)) {

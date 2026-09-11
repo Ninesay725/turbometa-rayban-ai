@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 
 class FakeGlassesCamera : GlassesCamera {
     val stateFlow = MutableStateFlow(DatStreamState.STOPPED)
@@ -125,8 +126,16 @@ class FakeDatDeviceObserver : DatDeviceObserver {
     /** When true, activeDeviceInfoFlow() throws synchronously instead of returning a flow. */
     var throwOnFlow = false
 
+    /**
+     * When true the returned flow throws on *collection*. GlassesSessionManager's `.catch {}`
+     * swallows that, which **completes** the flow: the collector coroutine finishes normally and
+     * the manager is left with a dead observer (final review I2a).
+     */
+    var failOnCollect = false
+
     override fun activeDeviceInfoFlow(): Flow<GlassesDeviceInfo?> {
         if (throwOnFlow) error("activeDeviceInfoFlow() boom (throwOnFlow)")
+        if (failOnCollect) return flow { error("activeDeviceInfoFlow() boom (failOnCollect)") }
         return device
     }
 }

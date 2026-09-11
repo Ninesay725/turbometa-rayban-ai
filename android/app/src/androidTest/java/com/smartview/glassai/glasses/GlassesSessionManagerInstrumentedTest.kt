@@ -53,6 +53,9 @@ class GlassesSessionManagerInstrumentedTest {
     companion object {
         private const val TAG = "GlassesSessionManagerIT"
         private const val OWNER = "InstrumentedTest"
+
+        /** The session-only owner OpenClawViewModel.enterScreen() registers (spec §3 decision 1). */
+        private const val CHAT_OWNER = "OpenClawChat"
         private const val REGISTRATION_TIMEOUT_MS = 10_000L
         private const val SESSION_TIMEOUT_MS = 20_000L
         private const val STREAM_TIMEOUT_MS = 20_000L
@@ -97,6 +100,7 @@ class GlassesSessionManagerInstrumentedTest {
     fun tearDown() {
         onMain {
             manager.release(OWNER)
+            manager.release(CHAT_OWNER)
             manager.release("WearablesViewModel")
             manager.release("QuickVisionService")
             manager.stopSession()
@@ -274,6 +278,49 @@ class GlassesSessionManagerInstrumentedTest {
         onMain {
             assertNull(manager.currentCameraOwner)
             assertEquals(0, manager.ownerCount)
+        }
+    }
+
+    /**
+     * Final review C1 (Task 9 D-4): while the OpenClaw chat is open it holds the shared session as
+     * a *session-only* owner and never streams. A snap must still work — through the capturer —
+     * and must leave the chat's claim (and the session) intact.
+     */
+    @Test
+    fun openClawSnapWorksWhileTheChatHoldsASessionOnlyClaim() {
+        val provider = SessionFrameProvider(
+            sessionManager = { manager },
+            isForeground = { true },
+            checkPermission = { CameraPermissionCheck.Granted },
+            encode = SessionFrameProvider.Companion::encodeBitmap,
+            capture = { m ->
+                val capturer = GlassesPhotoCapturer(
+                    sessionManager = m,
+                    owner = SessionFrameProvider.OWNER,
+                    config = config,
+                    decodePhoto = FrameConversions::decodePhoto,
+                    decodeFrame = { FrameConversions.frameToBitmap(it, FrameConversions.CAPTURE_JPEG_QUALITY) },
+                )
+                withContext(Dispatchers.Main.immediate) { capturer.capture() }
+            },
+        )
+        onMain {
+            awaitActiveDevice()
+            manager.acquire(CHAT_OWNER) // no forCamera: exactly what enterScreen() does
+            assertFalse(manager.hasCameraClaim)
+        }
+
+        val result = runBlocking { provider.snapshot(maxWidth = 640, quality = 0.8, timeoutMs = STREAM_TIMEOUT_MS) }
+
+        assertTrue("expected Ok but was $result", result is SnapshotResult.Ok)
+        val frame = (result as SnapshotResult.Ok).frame
+        assertEquals(0xFF.toByte(), frame.jpeg[0])
+        assertEquals(0xD8.toByte(), frame.jpeg[1])
+        onMain {
+            assertEquals(1, manager.ownerCount) // the chat's claim survived the snap
+            assertTrue(manager.hasSession)
+            assertNull(manager.currentCameraOwner)
+            assertFalse(manager.hasCameraClaim)
         }
     }
 

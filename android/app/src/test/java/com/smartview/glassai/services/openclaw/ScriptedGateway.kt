@@ -18,12 +18,15 @@ import okio.ByteString.Companion.encodeUtf8
  * app sends is parsed and queued in [received]; the latest server-side socket is in [socket].
  */
 class ScriptedGateway(val nonce: String = "nonce-1") {
-    enum class ConnectReply { OK, NOT_PAIRED, SILENT }
+    enum class ConnectReply { OK, NOT_PAIRED, REJECT, SILENT }
 
     val server = MockWebServer()
     val received = LinkedBlockingQueue<JsonObject>()
     @Volatile var socket: WebSocket? = null
     @Volatile var connectReply: ConnectReply = ConnectReply.OK
+    /** Error code answered for [ConnectReply.REJECT] (anything but NOT_PAIRED). */
+    @Volatile var rejectCode: String = "UNAUTHORIZED"
+    @Volatile var rejectMessage: String = "bad token"
     @Volatile var opens = 0
     /** Client-initiated closes seen by the server (onClosing). */
     @Volatile var closes = 0
@@ -49,6 +52,9 @@ class ScriptedGateway(val nonce: String = "nonce-1") {
                     ConnectReply.OK -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"protocol":3}}""")
                     ConnectReply.NOT_PAIRED -> webSocket.send(
                         """{"type":"res","id":"$id","ok":false,"error":{"code":"NOT_PAIRED","message":"device not paired"}}"""
+                    )
+                    ConnectReply.REJECT -> webSocket.send(
+                        """{"type":"res","id":"$id","ok":false,"error":{"code":"$rejectCode","message":"$rejectMessage"}}"""
                     )
                     ConnectReply.SILENT -> Unit
                 }

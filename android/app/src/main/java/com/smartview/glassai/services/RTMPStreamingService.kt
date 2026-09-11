@@ -69,6 +69,12 @@ class RTMPStreamingService(private val context: Context) {
         object Connecting : StreamingState()
         object Streaming : StreamingState()
         data class Error(val message: String) : StreamingState()
+        /**
+         * Unreachable with rtmp 2.2.6: the library never calls onDisconnectRtmp() for a live drop,
+         * so neither this state nor R.string.rtmp_disconnected fires today. Both are kept
+         * deliberately so a library upgrade that starts reporting drops works without a code change
+         * (final review Minor 5).
+         */
         object Disconnected : StreamingState()
     }
 

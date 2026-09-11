@@ -176,7 +176,9 @@ class OpenClawNodeServiceInstrumentedTest {
 
         val events = LinkedBlockingQueue<OpenClawChatEvent>()
         val job = CoroutineScope(Dispatchers.Default).launch { service.chatEvents.collect { events.add(it) } }
-        Thread.sleep(200)
+        // chatEvents has replay 0: the event below is lost unless the collector is already
+        // subscribed. Wait on the flow's own subscriptionCount instead of a fixed sleep.
+        runBlocking { withTimeout(TIMEOUT_MS) { service.chatSubscriptionCount.first { it > 0 } } }
         socket!!.send("""{"type":"event","event":"chat","payload":{"state":"final","message":{"role":"assistant","content":[{"type":"text","text":"hi from the gateway"}]}}}""")
         assertEquals(OpenClawChatEvent("hi from the gateway", true), events.poll(5, TimeUnit.SECONDS))
         job.cancel()

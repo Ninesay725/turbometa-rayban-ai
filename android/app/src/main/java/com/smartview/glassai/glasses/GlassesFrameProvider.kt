@@ -11,6 +11,8 @@ import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -62,18 +64,23 @@ interface GlassesFrameProvider {
  * Frame source for OpenClaw (Phase A final review, Recommendation 2, design (b)):
  * 1. If a feature currently borrows the camera, the last frame it published to
  *    GlassesSessionManager.latestFrame is used (a snap during Live AI returns the live frame).
- * 2. If any feature holds a claim (GlassesSessionManager.ownerCount > 0) but no live frame is
- *    available yet, wait up to timeoutMs for its first frame and answer NO_FRAME on timeout.
- * 3. Only when nobody claims the session at all is the camera borrowed through GlassesPhotoCapturer
+ * 2. If any feature holds a *camera* claim (GlassesSessionManager.hasCameraClaim) but no live
+ *    frame is available yet, wait up to timeoutMs for its first frame and answer NO_FRAME on timeout.
+ * 3. Only when nobody claims the camera is it borrowed through GlassesPhotoCapturer
  *    (owner "OpenClawSnap"), which stops the camera and releases the claim before returning.
  * Never runs when no Activity is started (spec §1: no background camera.snap).
  *
- * The 2/3 split is gated on ownerCount, not on currentCameraOwner (Task 4 review finding 2):
+ * The 2/3 split is gated on hasCameraClaim, not on currentCameraOwner (Task 4 review finding 2):
  * cameraOwner is only set inside addCamera(), so a feature between acquire() and addCamera() (up
  * to 12 s on a cold session) still looks owner-less. Entering the capturer there would let the
  * snap win addCamera() and fail the user's feature with CameraBusy("OpenClawSnap"). Both
- * directions therefore are: someone claims the session (QuickVision, Live AI, RTMP, …) → wait,
- * then NO_FRAME, and the gateway retries; nobody claims it → borrow the camera and take a photo.
+ * directions therefore are: someone claims the *camera* (QuickVision, Live AI, RTMP, …) → wait,
+ * then NO_FRAME, and the gateway retries; nobody does → borrow the camera and take a photo.
+ *
+ * A *session-only* claim never takes direction 2 (final review C1 / Task 9 D-4): the OpenClaw chat
+ * holds the shared session while it is open so a snap does not pay the 12 s session start, but it
+ * never streams — gating on the plain owner count made Snap & Send (and every gateway camera.snap
+ * while the chat was foregrounded) answer NO_FRAME forever.
  *
  * Known limit (documented in android/README.md): QuickVisionService borrows the camera for a few
  * seconds per wake-word capture (through GlassesPhotoCapturer, which holds a claim for that whole
@@ -96,6 +103,15 @@ class SessionFrameProvider(
     companion object {
         private const val TAG = "SessionFrameProvider"
         const val OWNER = "OpenClawSnap"
+
+        /**
+         * Single-flight for the capturer path (final review I1). Every capture borrows the camera
+         * as the same owner ("OpenClawSnap") and gives it back with release(OWNER), so two
+         * overlapping captures would drop each other's claim mid-stream — release() stops the
+         * camera and, with the owner set empty, the whole session. The lock lives on the companion
+         * on purpose: the guarantee must hold even if two SessionFrameProvider instances exist.
+         */
+        private val captureMutex = Mutex()
 
         fun create(app: Application): SessionFrameProvider {
             val registration = WearablesRegistrationGateway(app)
@@ -165,37 +181,51 @@ class SessionFrameProvider(
 
         manager.liveFrame()?.let { return encodeOrFail(it, maxWidth, quality) }
 
-        if (manager.ownerCount > 0) {
-            // A feature claims the session (it may still be between acquire() and addCamera()):
+        if (manager.hasCameraClaim) {
+            // A feature claims the camera (it may still be between acquire() and addCamera()):
             // never race it for the camera — wait for its first frame, then give up with NO_FRAME.
             val frame = manager.awaitLiveFrame(timeoutMs)
             return if (frame != null) encodeOrFail(frame, maxWidth, quality) else SnapshotResult.NoFrame
         }
 
-        when (val permission = checkPermission()) {
-            CameraPermissionCheck.Denied -> return SnapshotResult.PermissionRequired
-            is CameraPermissionCheck.Failed -> return SnapshotResult.NotReady(permission.description)
-            CameraPermissionCheck.Granted -> Unit
-        }
-
-        return when (val outcome = capture(manager)) {
-            is PhotoCaptureOutcome.Captured -> encodeOrFail(outcome.image, maxWidth, quality)
-            PhotoCaptureOutcome.NoDevice -> SnapshotResult.NotReady("No glasses connected")
-            PhotoCaptureOutcome.SessionFailed -> SnapshotResult.StreamFailed("Could not start the glasses session")
-            PhotoCaptureOutcome.SessionTimeout -> SnapshotResult.StreamFailed("Glasses session did not start in time")
-            is PhotoCaptureOutcome.CameraUnavailable -> {
-                if (outcome.error is CameraError.CameraBusy) {
-                    // Another owner grabbed the camera while we waited: use its next frame.
-                    val frame = manager.awaitLiveFrame(timeoutMs)
-                    if (frame != null) encodeOrFail(frame, maxWidth, quality) else SnapshotResult.NoFrame
+        return captureMutex.withLock {
+            // Re-check under the lock: while we waited for another snap, a feature may have started
+            // streaming (use its frame) or claimed the camera (do not race it).
+            manager.liveFrame()?.let { return@withLock encodeOrFail(it, maxWidth, quality) }
+            if (manager.hasCameraClaim) {
+                val frame = manager.awaitLiveFrame(timeoutMs)
+                return@withLock if (frame != null) {
+                    encodeOrFail(frame, maxWidth, quality)
                 } else {
-                    SnapshotResult.StreamFailed("Camera unavailable: ${outcome.error}")
+                    SnapshotResult.NoFrame
                 }
             }
-            is PhotoCaptureOutcome.StreamStartFailed -> SnapshotResult.StreamFailed(outcome.error.description)
-            PhotoCaptureOutcome.StreamTimeout -> SnapshotResult.StreamFailed("Stream did not start in time")
-            PhotoCaptureOutcome.NoImage -> SnapshotResult.NoFrame
-            PhotoCaptureOutcome.Timeout -> SnapshotResult.StreamFailed("Capture timed out")
+
+            when (val permission = checkPermission()) {
+                CameraPermissionCheck.Denied -> return@withLock SnapshotResult.PermissionRequired
+                is CameraPermissionCheck.Failed -> return@withLock SnapshotResult.NotReady(permission.description)
+                CameraPermissionCheck.Granted -> Unit
+            }
+
+            when (val outcome = capture(manager)) {
+                is PhotoCaptureOutcome.Captured -> encodeOrFail(outcome.image, maxWidth, quality)
+                PhotoCaptureOutcome.NoDevice -> SnapshotResult.NotReady("No glasses connected")
+                PhotoCaptureOutcome.SessionFailed -> SnapshotResult.StreamFailed("Could not start the glasses session")
+                PhotoCaptureOutcome.SessionTimeout -> SnapshotResult.StreamFailed("Glasses session did not start in time")
+                is PhotoCaptureOutcome.CameraUnavailable -> {
+                    if (outcome.error is CameraError.CameraBusy) {
+                        // Another owner grabbed the camera while we waited: use its next frame.
+                        val frame = manager.awaitLiveFrame(timeoutMs)
+                        if (frame != null) encodeOrFail(frame, maxWidth, quality) else SnapshotResult.NoFrame
+                    } else {
+                        SnapshotResult.StreamFailed("Camera unavailable: ${outcome.error}")
+                    }
+                }
+                is PhotoCaptureOutcome.StreamStartFailed -> SnapshotResult.StreamFailed(outcome.error.description)
+                PhotoCaptureOutcome.StreamTimeout -> SnapshotResult.StreamFailed("Stream did not start in time")
+                PhotoCaptureOutcome.NoImage -> SnapshotResult.NoFrame
+                PhotoCaptureOutcome.Timeout -> SnapshotResult.StreamFailed("Capture timed out")
+            }
         }
     }
 

@@ -13,6 +13,7 @@ import com.smartview.glassai.BuildConfig
 import java.net.Proxy
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,6 +73,14 @@ class OpenClawNodeService(
         const val DEFAULT_INVOKE_TIMEOUT_MS = 30_000L
         private const val CONNECT_TIMEOUT_S = 10L
 
+        /**
+         * WebSocket keepalive. The app-level `tick` is fire-and-forget and nothing checks for a
+         * reply, so a half-open socket (the phone roams off Wi-Fi) kept reporting "Connected" for
+         * minutes while node.invoke requests vanished into the kernel buffer. OkHttp fails the
+         * socket when a pong is missing, which lands in onFailure -> the existing backoff.
+         */
+        private const val PING_INTERVAL_S = 20L
+
         @Volatile
         private var instance: OpenClawNodeService? = null
 
@@ -106,11 +115,15 @@ class OpenClawNodeService(
             return "rayban-" + androidId.take(8).lowercase()
         }
 
-        /** LAN gateway client: no system proxy, 10 s connect, no read timeout (long-lived socket). */
+        /**
+         * LAN gateway client: no system proxy, 10 s connect, no read timeout (long-lived socket),
+         * 20 s ping keepalive (see [PING_INTERVAL_S]).
+         */
         fun lanHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)
             .connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(PING_INTERVAL_S, TimeUnit.SECONDS)
             .build()
     }
 
@@ -141,6 +154,15 @@ class OpenClawNodeService(
 
     private val _chatEvents = MutableSharedFlow<OpenClawChatEvent>(extraBufferCapacity = 64)
     val chatEvents: SharedFlow<OpenClawChatEvent> = _chatEvents.asSharedFlow()
+
+    /**
+     * Test hook: how many collectors [chatEvents] currently has. `chatEvents` has replay 0, so a
+     * test that sends an event before its collector is subscribed loses it. Instrumented tests wait
+     * on this instead of sleeping for a fixed time.
+     */
+    @VisibleForTesting
+    internal val chatSubscriptionCount: StateFlow<Int>
+        get() = _chatEvents.subscriptionCount
 
     val nodeId: String
         get() = clientInfo.nodeId
@@ -207,7 +229,13 @@ class OpenClawNodeService(
         }
     }
 
-    /** Must be called with [lock] held. */
+    /**
+     * Must be called with [lock] held.
+     *
+     * Invariant: `tickJob == null` on entry. The tick is only ever started by [handleHelloOk] and
+     * is cancelled on every path that ends a connection ([handleDisconnect], [disconnect],
+     * [failWithTransport]), so a dial can never leave an orphaned tick loop behind.
+     */
     private fun startConnection() {
         // A socket left open by a NOT_PAIRED wait (or any stale one) is closed before dialing
         // again, so the gateway never sees two connections from this device. Its later callbacks
@@ -336,18 +364,31 @@ class OpenClawNodeService(
         val id = UUID.randomUUID().toString()
         val signedAt = clock()
         val token = store.loadToken()?.takeIf { it.isNotBlank() }
-        val signer = deviceIdentity // first use loads or generates the seed
-        val signature = signer.signConnect(
-            clientId = OpenClawProtocol.CLIENT_ID,
-            clientMode = OpenClawProtocol.CLIENT_MODE,
-            role = OpenClawProtocol.ROLE,
-            scopes = OpenClawProtocol.SCOPES,
-            signedAtMs = signedAt,
-            token = token,
-            nonce = nonce,
-            platform = OpenClawProtocol.PLATFORM,
-            deviceFamily = null,
-        )
+        // Runs on the OkHttp reader thread and touches the Keystore / EncryptedSharedPreferences on
+        // first use. A throw here used to escape into OkHttp, which reported it as a socket failure:
+        // five reconnects and a misleading "Connection failed after 5 retries" (final review I3).
+        val signed = runCatching {
+            val signer = deviceIdentity // first use loads or generates the seed
+            signer to signer.signConnect(
+                clientId = OpenClawProtocol.CLIENT_ID,
+                clientMode = OpenClawProtocol.CLIENT_MODE,
+                role = OpenClawProtocol.ROLE,
+                scopes = OpenClawProtocol.SCOPES,
+                signedAtMs = signedAt,
+                token = token,
+                nonce = nonce,
+                platform = OpenClawProtocol.PLATFORM,
+                deviceFamily = null,
+            )
+        }.getOrElse { error ->
+            Log.e(TAG, "device identity unavailable", error)
+            synchronized(lock) {
+                failWithTransport("IDENTITY: ${error.message ?: error.javaClass.simpleName}")
+            }
+            return
+        }
+        val signer = signed.first
+        val signature = signed.second
         val params = JsonObject().apply {
             addProperty("minProtocol", OpenClawProtocol.PROTOCOL_VERSION)
             addProperty("maxProtocol", OpenClawProtocol.PROTOCOL_VERSION)
@@ -386,10 +427,40 @@ class OpenClawNodeService(
         }
         val error = json.obj("error")
         val code = error?.string("code")
-        Log.w(TAG, "error response for $id: $code ${error?.string("message")}")
+        val message = error?.string("message")
+        Log.w(TAG, "error response for $id: $code $message")
         if (code == OpenClawProtocol.ERROR_NOT_PAIRED) {
             synchronized(lock) { _connectionState.value = OpenClawConnectionState.WaitingForPairing }
+            return
         }
+        synchronized(lock) {
+            // A gateway that rejects the handshake (auth/protocol) keeps the socket open, so no
+            // close/failure callback ever arrives and nothing retries: the UI used to stay
+            // "Connecting..." forever (final review I3). Retrying would not help either — the token
+            // or the protocol version is wrong — so the backoff is stopped as well.
+            if (id != null && id == pendingConnectId) {
+                failWithTransport("${code ?: "?"}: ${message ?: ""}")
+            }
+        }
+    }
+
+    /**
+     * Ends the connection with Error(Transport) and stops reconnecting. Used for the two failures
+     * that retrying cannot fix: a rejected `connect` and an unavailable device identity.
+     * Must be called with [lock] held.
+     */
+    private fun failWithTransport(detail: String) {
+        Log.e(TAG, "transport error: $detail")
+        shouldReconnect = false
+        reconnectJob?.cancel()
+        reconnectJob = null
+        tickJob?.cancel()
+        tickJob = null
+        pendingConnectId = null
+        val socket = webSocket
+        webSocket = null
+        runCatching { socket?.close(1000, "connect rejected") }
+        _connectionState.value = OpenClawConnectionState.Error(OpenClawErrorReason.Transport(detail))
     }
 
     private fun handleHelloOk() {
@@ -482,6 +553,11 @@ class OpenClawNodeService(
             val result = withTimeoutOrNull(budget) {
                 try {
                     handler.handleCommand(request)
+                } catch (e: CancellationException) {
+                    // withTimeoutOrNull's own TimeoutCancellationException travels this path: it
+                    // must reach the timeout machinery (and a cancelled scope must stay cancelled)
+                    // instead of becoming an INTERNAL error (final review Minor 8).
+                    throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "command ${request.command} threw: ${e.message}")
                     OpenClawNodeInvokeResult.failure(request.id, OpenClawProtocol.ERROR_INTERNAL, e.message ?: "internal error")

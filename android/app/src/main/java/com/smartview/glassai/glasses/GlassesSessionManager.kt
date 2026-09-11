@@ -104,6 +104,14 @@ class GlassesSessionManager internal constructor(
      */
     val lastSessionError: StateFlow<DeviceSessionError?> = _lastSessionError.asStateFlow()
     private val owners = LinkedHashSet<String>()
+    /**
+     * Owners that declared a *camera* intent in [acquire] (final review C1). Maintained on the main
+     * thread together with [owners]; the off-main readers use [cameraClaimCount] instead.
+     */
+    private val cameraIntents = LinkedHashSet<String>()
+    // @Volatile: read by SessionFrameProvider off the main thread (hasCameraClaim), written here.
+    @Volatile
+    private var cameraClaimCount = 0
 
     private var sessionStateJob: Job? = null
     private var sessionErrorJob: Job? = null
@@ -152,6 +160,19 @@ class GlassesSessionManager internal constructor(
         get() = cameraOwner
 
     /**
+     * True while somebody intends to use the camera: an owner that acquired with
+     * `forCamera = true` (it may still be between acquire() and addCamera()), or the current
+     * camera borrower. A session-only owner — the OpenClaw chat, and in Phase C the Display-card
+     * owners — does NOT set this, so camera.snap can borrow the camera while they hold the session
+     * (final review C1 / Task 9 D-4).
+     *
+     * Volatile/immutable reads only: this is the one bookkeeping flag SessionFrameProvider reads
+     * off the main thread.
+     */
+    val hasCameraClaim: Boolean
+        get() = cameraClaimCount > 0 || cameraOwner != null
+
+    /**
      * Starts observing the active device. Idempotent.
      *
      * OpenClawIntegration.install() calls this from Application.onCreate(), before Bluetooth
@@ -187,6 +208,12 @@ class GlassesSessionManager internal constructor(
             }
         }
         deviceJob = job
+        // The `.catch {}` above turns a collection failure into a *normal completion*, so
+        // runCatching sees success and the old code left deviceJob pointing at a finished Job —
+        // every later startMonitoring() was a permanent no-op (final review I2a). Whatever ends
+        // this collector, the slot is freed so MainActivity can re-arm it after the Bluetooth
+        // grant.
+        job.invokeOnCompletion { if (deviceJob === job) deviceJob = null }
         job.start()
     }
 
@@ -195,10 +222,17 @@ class GlassesSessionManager internal constructor(
      * stopping, a session is created and started synchronously. Failures are NOT reported here —
      * owners that need the session call [ensureSessionStarted], which waits for the outgoing
      * session, retries once on SESSION_ALREADY_EXISTS and reports the final error.
+     *
+     * @param forCamera true for owners that will borrow the camera ([addCamera]); they raise
+     *   [hasCameraClaim] from the moment they acquire, so an OpenClaw camera.snap waits for their
+     *   first frame instead of racing them for the camera. Leave it false for session-only owners
+     *   (the OpenClaw chat holds the session so a snap does not pay the 12 s session start).
      */
-    fun acquire(owner: String) {
+    fun acquire(owner: String, forCamera: Boolean = false) {
         owners.add(owner)
-        Log.d(TAG, "acquire($owner) owners=$owners stoppingPrevious=${stoppingSession != null}")
+        if (forCamera && cameraIntents.add(owner)) cameraClaimCount = cameraIntents.size
+        Log.d(TAG, "acquire($owner, forCamera=$forCamera) owners=$owners cameraIntents=$cameraIntents " +
+            "stoppingPrevious=${stoppingSession != null}")
         if (session == null && stoppingSession == null) {
             val error = createSessionIfNeeded()
             if (error != null) {
@@ -210,7 +244,8 @@ class GlassesSessionManager internal constructor(
     /** Drops [owner]'s claim (and its camera); stops the session when nobody is left. */
     fun release(owner: String) {
         if (!owners.remove(owner)) return
-        Log.d(TAG, "release($owner) owners=$owners")
+        if (cameraIntents.remove(owner)) cameraClaimCount = cameraIntents.size
+        Log.d(TAG, "release($owner) owners=$owners cameraIntents=$cameraIntents")
         if (cameraOwner == owner) stopCamera(owner)
         if (owners.isEmpty()) stopSession()
     }
@@ -380,6 +415,8 @@ class GlassesSessionManager internal constructor(
     @VisibleForTesting
     internal fun resetForTests() {
         owners.clear()
+        cameraIntents.clear()
+        cameraClaimCount = 0
         stopSession()
         stoppingJob?.cancel()
         stoppingJob = null

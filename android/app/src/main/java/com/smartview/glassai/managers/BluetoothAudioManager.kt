@@ -44,6 +44,16 @@ class BluetoothAudioManager(private val context: Context) {
     private var bluetoothHeadset: BluetoothHeadset? = null
     private var isBluetoothScoOn = false
 
+    /**
+     * True between [startBluetoothSco] and [stopBluetoothSco], regardless of whether the SCO link
+     * ever came up. [isBluetoothScoOn] is only set by the SCO_AUDIO_STATE_CONNECTED broadcast, so
+     * an arm that never connects (SCO_AUDIO_STATE_ERROR, a headset without HFP audio, or the user
+     * leaving inside the connect window) used to make stopBluetoothSco() return early and leave the
+     * phone in MODE_IN_COMMUNICATION: media stayed muted and the volume rocker kept controlling
+     * call volume (final review I4).
+     */
+    private var scoRequested = false
+
     private val _currentAudioSource = MutableStateFlow(AudioSource.PHONE_MIC)
     val currentAudioSource: StateFlow<AudioSource> = _currentAudioSource.asStateFlow()
 
@@ -199,6 +209,9 @@ class BluetoothAudioManager(private val context: Context) {
         }
 
         try {
+            // Set before the mode change: everything below must be undone by stopBluetoothSco(),
+            // including a failure partway through.
+            scoRequested = true
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.startBluetoothSco()
             audioManager.isBluetoothScoOn = true
@@ -212,7 +225,9 @@ class BluetoothAudioManager(private val context: Context) {
      * 停止蓝牙 SCO 连接
      */
     fun stopBluetoothSco() {
-        if (!isBluetoothScoOn) {
+        // Runs whenever SCO was *requested*, not only when the link actually came up — otherwise a
+        // failed arm leaves MODE_IN_COMMUNICATION behind forever (final review I4).
+        if (!scoRequested && !isBluetoothScoOn) {
             Log.d(TAG, "蓝牙 SCO 未开启")
             return
         }
@@ -221,10 +236,12 @@ class BluetoothAudioManager(private val context: Context) {
             audioManager.isBluetoothScoOn = false
             audioManager.stopBluetoothSco()
             audioManager.mode = AudioManager.MODE_NORMAL
-            isBluetoothScoOn = false
             Log.d(TAG, "停止蓝牙 SCO")
         } catch (e: Exception) {
             Log.e(TAG, "停止蓝牙 SCO 失败: ${e.message}")
+        } finally {
+            scoRequested = false
+            isBluetoothScoOn = false
         }
     }
 

@@ -190,7 +190,6 @@
     <string name="clear_all_records">Clear All Records</string>
     <string name="clear_records_desc">Delete all conversation history</string>
     <string name="about">About</string>
-    <string name="version">Version</string>
     <string name="github_project">GitHub Project</string>
     <string name="github_project_url">https://github.com/Turbo1123/turbometa-rayban-ai</string>
     <string name="download_latest">Download Latest Version</string>
@@ -519,6 +518,7 @@
     <string name="rtmp_stream_key">Stream key</string>
     <string name="rtmp_bitrate">Bitrate</string>
     <string name="rtmp_bitrate_note">Note: higher bitrate = better quality but needs more bandwidth</string>
+    <!-- Unreachable with rtmp 2.2.6 (onDisconnectRtmp is never called for a live drop); kept for a library upgrade. -->
     <string name="rtmp_disconnected">Disconnected from server</string>
     <string name="rtmp_first_frame_timeout">No video from the glasses within 10 seconds</string>
     <string name="rtmp_connect_failed">Failed to connect to RTMP server</string>

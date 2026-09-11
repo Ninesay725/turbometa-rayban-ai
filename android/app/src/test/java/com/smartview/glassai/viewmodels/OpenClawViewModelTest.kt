@@ -348,6 +348,25 @@ class OpenClawViewModelTest {
         assertEquals(0, manager.ownerCount)
     }
 
+    /**
+     * Final review I4 (VM half): the SCO link may never come up (SCO_AUDIO_STATE_ERROR, or the user
+     * leaves inside the 3 s window). The ViewModel must still call stopSco() on the way out —
+     * BluetoothAudioManager then resets MODE_IN_COMMUNICATION even though it never saw a
+     * SCO_AUDIO_STATE_CONNECTED broadcast (the manager half of the fix is `scoRequested`).
+     */
+    @Test
+    fun releaseScoAfterAFailedArmStillCallsStopSco() {
+        val vm = newViewModel(route)
+        vm.enterScreen()
+        vm.switchAudioSource(BluetoothAudioManager.AudioSource.BLUETOOTH_MIC)
+        assertEquals(1, route.startCalls)
+        assertFalse(route.sco.value) // the link never came up
+
+        vm.leaveScreen()
+
+        assertEquals(1, route.stopCalls)
+    }
+
     @Test
     fun switchingBackToThePhoneMicStopsSco() {
         val vm = newViewModel(route)

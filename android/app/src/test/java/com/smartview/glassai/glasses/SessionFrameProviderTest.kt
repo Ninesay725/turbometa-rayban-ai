@@ -5,7 +5,10 @@ import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceType
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -178,20 +181,82 @@ class SessionFrameProviderTest {
     }
 
     /**
-     * Review finding 2 (fix round 1): a feature between acquire() and addCamera() reports no camera
-     * owner yet, but it does hold a claim. The capturer fallback must not race it for the camera —
-     * with claims outstanding the snap waits for the owner's first frame and answers NO_FRAME.
+     * Review finding 2 (fix round 1): a *camera* borrower between acquire() and addCamera() reports
+     * no camera owner yet, but it does hold a camera claim. The capturer fallback must not race it
+     * for the camera — with a camera claim outstanding the snap waits for that owner's first frame
+     * and answers NO_FRAME.
+     *
+     * Final review C1: the claim must declare `forCamera = true` for this to apply. A session-only
+     * claim (the OpenClaw chat) falls through to the capturer — see
+     * [sessionOnlyClaimFallsThroughToTheCapturer].
      */
     @Test
     fun fallbackIsSkippedWhileAnotherOwnerHoldsAClaim() = runTest(UnconfinedTestDispatcher()) {
         val manager = newManager()
         observer.device.value = rayban
-        manager.acquire("B") // claimed; addCamera() has not run yet, so currentCameraOwner is null
+        // claimed for the camera; addCamera() has not run yet, so currentCameraOwner is null
+        manager.acquire("B", forCamera = true)
 
         val result = provider(manager).snapshot(640, 0.8, 200)
 
         assertEquals(SnapshotResult.NoFrame, result)
         assertEquals(0, captureCalls)
+    }
+
+    /**
+     * Final review C1 (Task 9 D-4): OpenClawViewModel.enterScreen() holds the shared session while
+     * the chat is open but never streams. That claim must not block Snap & Send (nor a gateway
+     * `camera.snap` while the chat is foregrounded): the snapshot falls through to the capturer and
+     * the chat keeps its claim afterwards.
+     */
+    @Test
+    fun sessionOnlyClaimFallsThroughToTheCapturer() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        observer.device.value = rayban
+        manager.acquire("OpenClawChat") // session only: no camera intent
+        val photo = TestBitmaps.stub()
+        captureOutcome = PhotoCaptureOutcome.Captured(photo, fromVideoFrame = false)
+
+        val result = provider(manager).snapshot(640, 0.8, 200)
+
+        assertTrue("expected Ok but was $result", result is SnapshotResult.Ok)
+        assertEquals(1, captureCalls)
+        assertEquals(listOf(photo), encoded)
+        assertEquals(1, manager.ownerCount) // the chat's claim survived the snap
+    }
+
+    /**
+     * Final review I1: the gateway invoke path and the chat's Snap & Send both borrow the camera as
+     * the same owner ("OpenClawSnap"), so two overlapping captures would release each other's
+     * camera and session. The permission-check + capture path is single-flight (a companion-level
+     * Mutex), so the second snapshot waits instead of racing.
+     */
+    @Test
+    fun concurrentSnapshotsCaptureOneAtATime() = runTest(UnconfinedTestDispatcher()) {
+        val manager = newManager()
+        observer.device.value = rayban
+        val inFlight = AtomicInteger(0)
+        val maxConcurrent = AtomicInteger(0)
+        val provider = SessionFrameProvider(
+            sessionManager = { manager },
+            isForeground = { true },
+            checkPermission = { CameraPermissionCheck.Granted },
+            encode = { _, maxWidth, _ -> FrameSnapshot(byteArrayOf(maxWidth.toByte()), maxWidth, maxWidth) },
+            capture = {
+                maxConcurrent.updateAndGet { maxOf(it, inFlight.incrementAndGet()) }
+                delay(50)
+                inFlight.decrementAndGet()
+                PhotoCaptureOutcome.Captured(TestBitmaps.stub(), fromVideoFrame = false)
+            },
+            encodeDispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+
+        val first = async { provider.snapshot(640, 0.8, 1_000) }
+        val second = async { provider.snapshot(640, 0.8, 1_000) }
+        val results = listOf(first.await(), second.await())
+
+        assertEquals(1, maxConcurrent.get())
+        assertTrue("expected two Ok results but was $results", results.all { it is SnapshotResult.Ok })
     }
 
     @Test

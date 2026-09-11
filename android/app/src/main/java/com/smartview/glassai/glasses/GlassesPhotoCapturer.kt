@@ -92,7 +92,7 @@ class GlassesPhotoCapturer<T : Any>(
             Log.w(TAG, "no active device within ${deviceWaitMs}ms")
             return PhotoCaptureOutcome.NoDevice
         }
-        sessionManager.acquire(owner)
+        sessionManager.acquire(owner, forCamera = true)
         try {
             return withTimeoutOrNull(totalBudgetMs) { borrowCameraAndCapture() }
                 ?: PhotoCaptureOutcome.Timeout.also { Log.e(TAG, "capture exceeded ${totalBudgetMs}ms") }

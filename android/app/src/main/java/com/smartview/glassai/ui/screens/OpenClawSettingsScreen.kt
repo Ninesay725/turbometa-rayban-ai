@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -74,13 +75,24 @@ fun OpenClawSettingsScreen(onBackClick: () -> Unit) {
     var token by remember { mutableStateOf(service.loadGatewayToken() ?: "") }
     val isConnected = connectionState == OpenClawConnectionState.Connected
 
-    fun saveAndConnect() {
+    /** Persists the four fields without dialing (Task 9 D-3: "Done" used to discard edits). */
+    fun save() {
         service.gatewayHost = host.trim()
         service.gatewayPort = portText.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: OpenClawProtocol.DEFAULT_PORT
         service.gatewayScheme = scheme
         service.saveGatewayToken(token) // blank deletes
+    }
+
+    fun saveAndConnect() {
+        save()
         // The explicit button dials now, even mid-backoff (auto-connect elsewhere never does).
         service.connect(force = true)
+    }
+
+    /** Both back affordances persist first; neither connects. */
+    fun saveAndLeave() {
+        save()
+        onBackClick()
     }
 
     Scaffold(
@@ -88,11 +100,11 @@ fun OpenClawSettingsScreen(onBackClick: () -> Unit) {
             TopAppBar(
                 title = { Text(stringResource(R.string.openclaw_title), fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(onClick = { saveAndLeave() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
-                actions = { TextButton(onClick = onBackClick) { Text(stringResource(R.string.done)) } }
+                actions = { TextButton(onClick = { saveAndLeave() }) { Text(stringResource(R.string.done)) } }
             )
         }
     ) { padding ->
@@ -203,10 +215,20 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
+/**
+ * Label/value row. The value gets the larger weight (Task 9 D-1): the long "Commands" list used to
+ * take its intrinsic width and squeeze the label to one character per line.
+ */
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Text(
+            value,
+            modifier = Modifier.weight(2f),
+            textAlign = TextAlign.End,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
     }
 }

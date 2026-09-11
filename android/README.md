@@ -75,6 +75,7 @@ The app must be in the foreground for `camera.snap` (the DAT SDK cannot stream f
 5. Voice input needs an Alibaba DashScope API key (Settings → API Key); the phone/glasses microphone toggle works like Live AI.
 6. Voice input follows the Alibaba region setting. `fun-asr-realtime` is confirmed on the Beijing endpoint; on the **Singapore** (intl) endpoint its availability has not been verified — if the mic reports "Speech recognition failed", switch the Alibaba endpoint to Beijing.
 7. `camera.snap` needs a frame from the glasses. While Live AI / Live Stream / RTMP are running it returns the live frame; while nobody streams it borrows the camera briefly. During a wake-word Quick Vision capture (a few seconds) the camera is busy and the command answers `NO_FRAME` — the AI simply retries.
+8. **Security note — cleartext is allowed app-wide.** The OpenClaw gateway is normally a plain `ws://` server on your own LAN, and Android's network security config cannot whitelist an address *range*, only fixed hosts — the gateway address is typed by you at runtime, so `cleartextTrafficPermitted="true"` is unavoidable here. Every cloud endpoint the app uses (DashScope, Gemini, OpenRouter, Fun-ASR) is `https://` / `wss://` regardless. Use `wss://` for OpenClaw when the gateway is exposed beyond your LAN, or put it behind Tailscale. Please do not "fix" this by removing the flag — it breaks LAN gateways.
 
 1. 重启 Gateway，然后在 App 打开 **设置 → 集成 → OpenClaw**（或聊天页右上角齿轮）。
 2. 填写 Gateway **地址**（局域网 IP）与**端口**（默认 `18789`），选择 `ws://`（局域网）或 `wss://`（TLS 反代），粘贴 OpenClaw 仪表盘 URL 中的
@@ -84,6 +85,7 @@ The app must be in the foreground for `camera.snap` (the DAT SDK cannot stream f
 5. 语音输入需要阿里云 DashScope API Key（设置 → API Key）；手机 / 眼镜麦克风切换与 Live AI 一致。
 6. 语音识别跟随阿里云地域设置。`fun-asr-realtime` 已确认在北京节点可用；**新加坡**（intl）节点尚未验证——若麦克风提示「语音识别失败」，请把阿里云节点切回北京。
 7. `camera.snap` 需要眼镜画面：Live AI / 直播 / RTMP 运行时返回实时画面；无人使用相机时会短暂借用相机；唤醒词 Quick Vision 拍照的几秒内相机被占用，命令返回 `NO_FRAME`，AI 重试即可。
+8. **安全说明 — 全局允许明文流量。** OpenClaw Gateway 通常是局域网内的 `ws://` 服务，而 Android 的网络安全配置只能白名单固定域名、无法白名单 IP 段，地址又由用户运行时填写，因此 `cleartextTrafficPermitted="true"` 是必需的。所有云端接口（DashScope、Gemini、OpenRouter、Fun-ASR）仍然全部走 `https://` / `wss://`。Gateway 暴露到局域网之外时请改用 `wss://` 或用 Tailscale；请勿删除该配置，否则局域网 Gateway 会无法连接。
 
 ---
 
