@@ -107,11 +107,14 @@ class RTMPStreamingService(private val context: Context) {
     // thread (ledger T6). One thread keeps disconnects ordered; release() drains and stops it.
     private val disconnectExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "rtmp-disconnect") }
 
-    // Bumped once per RtmpClient created in startStreaming(). Each ConnectCheckerRtmp captures the
-    // generation it was built for and compares against this on every callback (fix-round-1 T2):
-    // a callback that fires after its client has been replaced or retired (a late async callback
-    // racing a subsequent start/stop) sees a mismatch and returns instead of mutating state on
-    // behalf of a client nobody holds a reference to anymore.
+    // Bumped in startStreaming() (once per RtmpClient created, fix-round-1 T2) AND in
+    // stopStreaming() (once per client retired, fix-round-2): it advances on both start and stop.
+    // Each ConnectCheckerRtmp captures the generation it was built for and compares against this on
+    // every callback: a callback that fires after its client has been replaced by a later
+    // startStreaming(), or retired by a stopStreaming() with no subsequent start, sees a mismatch
+    // and returns instead of mutating state on behalf of a client nobody holds a reference to
+    // anymore. Two increments in a stop-then-start sequence are harmless — startStreaming() always
+    // reads the post-increment value into its own myGeneration.
     private val connectionGeneration = AtomicLong(0)
 
     @Volatile
@@ -505,6 +508,16 @@ class RTMPStreamingService(private val context: Context) {
                 }
                 encoder = null
             }
+
+            // Retire this client's generation BEFORE swapping it out (fix-round-2): stopStreaming()
+            // previously never touched connectionGeneration, so a client retired purely by Stop
+            // (no subsequent startStreaming()) kept its generation valid forever. That left
+            // onConnectionSuccessRtmp/onConnectionFailedRtmp/onAuthErrorRtmp free to mutate _state
+            // from a late callback racing this disconnect — onDisconnectRtmp was already guarded by
+            // isStreaming, but those three were not. Bumping here makes every one of the seven
+            // ConnectCheckerRtmp overrides fail their `myGeneration != connectionGeneration.get()`
+            // check for this client from this point on.
+            connectionGeneration.incrementAndGet()
 
             // Swap first so a second stopStreaming() sees null: exactly one disconnect per client.
             // The disconnect itself (socket I/O, and it invokes onDisconnectRtmp synchronously)
